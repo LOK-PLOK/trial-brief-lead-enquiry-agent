@@ -18,6 +18,7 @@ be filled in.
 - [`docs/Trial_Brief_Paul_Detablan.md`](docs/Trial_Brief_Paul_Detablan.md) — the original brief.
 - [`docs/architecture.md`](docs/architecture.md) — source of truth for system design.
 - [`docs/development-rules.md`](docs/development-rules.md) — source of truth for implementation rules.
+- [`docs/contracts.md`](docs/contracts.md) — source of truth for every immutable input/output contract.
 
 ## Repository layout
 

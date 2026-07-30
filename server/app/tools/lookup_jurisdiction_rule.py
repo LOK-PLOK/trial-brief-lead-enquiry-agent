@@ -33,7 +33,10 @@ class LookupJurisdictionRuleTool(Tool):
         self._rules_path = rules_path
 
     def run(self, args: LookupJurisdictionRuleArgs) -> ToolResult:
-        """TODO(tools/lookup_jurisdiction_rule): load app/data/jurisdiction_rules.json
+        """`args` is already validated against `LookupJurisdictionRuleArgs`
+        by `Tool.execute()` -- this only needs to do the actual lookup.
+
+        TODO(tools/lookup_jurisdiction_rule): load app/data/jurisdiction_rules.json
         (cache in-process; it's small and static), look up `args.country`
         (case/whitespace-normalized), and return a fallback rule (not a
         fabricated one) with a logged warning for unknown countries."""

@@ -33,7 +33,10 @@ class WriteRecordTool(Tool):
     result_schema = WriteRecordResult
 
     def run(self, args: WriteRecordArgs) -> ToolResult:
-        """TODO(tools/write_record):
+        """`args` is already validated against `WriteRecordArgs` by
+        `Tool.execute()` — this only needs to do the actual persistence.
+
+        TODO(tools/write_record):
         1. Compute `dedupe_hash` via services/dedupe.py from
            `args.extracted.email` / `args.extracted.phone`.
         2. Check db/repository.py for an existing lead with that hash;

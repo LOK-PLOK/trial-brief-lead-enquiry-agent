@@ -28,7 +28,10 @@ class ParseEnquiryTool(Tool):
         self._adapter = adapter
 
     def run(self, args: ParseEnquiryArgs) -> ToolResult:
-        """TODO(tools/parse_enquiry): call self._adapter.complete_structured(...)
+        """`args` is already validated against `ParseEnquiryArgs` by
+        `Tool.execute()` -- this only needs to do the actual extraction.
+
+        TODO(tools/parse_enquiry): call self._adapter.complete_structured(...)
         with response_schema=ExtractedFields, using
         prompts/parse_enquiry_prompt.py. Wrap in try/except so an adapter
         failure becomes ToolResult(success=False, error=...) rather than an

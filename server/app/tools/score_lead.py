@@ -31,7 +31,10 @@ class ScoreLeadTool(Tool):
     result_schema = ScoreLeadResult
 
     def run(self, args: ScoreLeadArgs) -> ToolResult:
-        """TODO(tools/score_lead): implement a pure, deterministic weighted
+        """`args` is already validated against `ScoreLeadArgs` by
+        `Tool.execute()` — this only needs to compute the score.
+
+        TODO(tools/score_lead): implement a pure, deterministic weighted
         score (e.g. budget_band weight + urgency weight +/- jurisdiction risk
         adjustment). Must be a pure function of `args` — no randomness, no
         LLM calls — so run-to-run variance in the harness (section 11)
