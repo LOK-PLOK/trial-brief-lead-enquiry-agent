@@ -1,0 +1,20 @@
+{
+  "_comment": "TODO(tools/lookup_jurisdiction_rule): fill in real handling rules per country once the 15 enquiry samples are supplied. Structure below is illustrative only. 'default' is the fallback used for any country not explicitly listed.",
+  "rules": {
+    "United Kingdom": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "TODO: placeholder rule."
+    },
+    "United States": {
+      "requires_disclaimer": true,
+      "restricted": true,
+      "handling_note": "TODO: placeholder rule."
+    }
+  },
+  "default": {
+    "requires_disclaimer": true,
+    "restricted": false,
+    "handling_note": "TODO: placeholder fallback rule for unrecognized countries."
+  }
+}

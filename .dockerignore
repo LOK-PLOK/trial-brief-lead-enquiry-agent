@@ -1,0 +1,14 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/dist
+**/.git
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+server/data/*.db
+evaluation/reports/*.json
+.env
+.env.*
+!.env.example

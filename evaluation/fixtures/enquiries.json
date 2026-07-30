@@ -1,0 +1,4 @@
+{
+  "_comment": "TODO(evaluation/fixtures): replace with the 15 enquiry samples once supplied (per docs/Trial_Brief_Paul_Detablan.md section 3.1, 'I will supply 15 enquiry samples on the Monday morning'). Each entry needs a stable `id` so harness runs/metrics can be grouped by enquiry across the 3 repeats (docs/architecture.md section 11).",
+  "enquiries": []
+}

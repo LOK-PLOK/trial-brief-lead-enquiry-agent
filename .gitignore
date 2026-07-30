@@ -1,0 +1,35 @@
+# --- Python (server/) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.db
+*.sqlite3
+server/data/*.db
+
+# --- Node (client/) ---
+node_modules/
+client/dist/
+client/.vite/
+*.local
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Evaluation artifacts (generated, not source) ---
+evaluation/reports/*.json
+!evaluation/reports/.gitkeep
+
+# --- Editor / OS ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Logs ---
+*.log

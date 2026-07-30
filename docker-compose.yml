@@ -1,0 +1,15 @@
+# Convenience wrapper around the root Dockerfile for local development —
+# mirrors the single-container production deployment (docs/architecture.md
+# section 13) but with the SQLite data directory mounted from the host so
+# it survives `docker compose down`.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./server/data:/app/data

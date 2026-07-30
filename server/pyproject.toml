@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+# UP042: this project intentionally uses `class X(str, Enum)` rather than
+# `enum.StrEnum` so `ToolName`/`BudgetBand`/etc. stay valid plain strings when
+# dumped into JSON columns / LLM structured-output schemas across the
+# Python versions likely to run this (StrEnum is 3.11+ only).
+ignore = ["UP042"]

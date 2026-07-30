@@ -1,0 +1,19 @@
+# Runtime dependencies. Versions pinned to what was verified to install and
+# import cleanly together (see "Verify backend imports" in the scaffolding
+# notes) — bump deliberately, not accidentally, since reproducibility of the
+# evaluation harness depends on a stable environment.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+SQLAlchemy==2.0.51
+alembic==1.18.5
+httpx==0.28.1
+python-multipart==0.0.32
+
+# Provider SDKs for the model adapter layer (server/app/llm/). Both are
+# installed regardless of MODEL_PROVIDER so the adapter can be swapped via
+# env var alone; Ollama needs no SDK, it's called over plain HTTP (httpx).
+openai==2.50.0
+anthropic==0.120.2

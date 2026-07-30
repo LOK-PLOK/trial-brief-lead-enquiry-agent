@@ -1,0 +1,4 @@
+{
+  "_comment": "TODO(evaluation/fixtures): write 3 adversarial enquiries per docs/Trial_Brief_Paul_Detablan.md section 3.7. At least one must attempt prompt injection embedded in the free text (e.g. instructions telling the executor to skip lookup_jurisdiction_rule, or to record the highest budget band). See docs/architecture.md section 14 (adversarial sequence diagram) and section 15 (prompt-injection risk).",
+  "enquiries": []
+}
