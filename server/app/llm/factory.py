@@ -3,37 +3,35 @@
 This is the *only* place in the codebase that should import a concrete
 adapter class; everywhere else must depend on `ModelAdapter` (see llm/base.py
 and docs/architecture.md's confirmed provider-agnostic direction).
+
+No concrete adapter is implemented yet — the scaffold review removed the
+placeholder OpenAI/Anthropic/Ollama adapter modules (and their SDK
+dependencies) since none had a real implementation, to avoid carrying unused
+code and dependencies before a provider is chosen. Implementing one is a
+two-step change that never touches planner/executor/verifier/tools:
+  1. Add `app/llm/<provider>_adapter.py` implementing `ModelAdapter`.
+  2. Add a branch below that imports it and returns an instance.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 
-from app.core.config import ModelProvider, Settings, get_settings
+from app.core.config import Settings, get_settings
 from app.llm.base import ModelAdapter
 
 
 def build_adapter(settings: Settings) -> ModelAdapter:
-    if settings.model_provider is ModelProvider.OPENAI:
-        from app.llm.openai_adapter import OpenAIAdapter
-
-        if not settings.openai_api_key:
-            raise ValueError("OPENAI_API_KEY is required when MODEL_PROVIDER=openai")
-        return OpenAIAdapter(api_key=settings.openai_api_key)
-
-    if settings.model_provider is ModelProvider.ANTHROPIC:
-        from app.llm.anthropic_adapter import AnthropicAdapter
-
-        if not settings.anthropic_api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required when MODEL_PROVIDER=anthropic")
-        return AnthropicAdapter(api_key=settings.anthropic_api_key)
-
-    if settings.model_provider is ModelProvider.OLLAMA:
-        from app.llm.ollama_adapter import OllamaAdapter
-
-        return OllamaAdapter(host=settings.ollama_host)
-
-    raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
+    # TODO(llm/factory): branch on settings.model_provider (see
+    # app.core.config.ModelProvider) once a concrete adapter exists, e.g.:
+    #     if settings.model_provider is ModelProvider.OPENAI:
+    #         from app.llm.openai_adapter import OpenAIAdapter
+    #         return OpenAIAdapter(api_key=settings.openai_api_key)
+    raise NotImplementedError(
+        f"No ModelAdapter implementation exists yet for MODEL_PROVIDER="
+        f"{settings.model_provider.value!r}. Add app/llm/<provider>_adapter.py "
+        f"and wire it in here."
+    )
 
 
 @lru_cache

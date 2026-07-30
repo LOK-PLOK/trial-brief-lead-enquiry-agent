@@ -69,9 +69,11 @@ def get_session_factory() -> sessionmaker[Session]:
 def init_db() -> None:
     """Create all tables if they don't exist.
 
-    TODO(db): once Alembic migrations (db/migrations/) are in place, prefer
-    running migrations over this for anything beyond local dev / first boot,
-    so schema history stays reproducible.
+    No migration tool is used for this trial (see scaffold review: Alembic
+    was removed as unnecessary for a single-environment 3-day assessment with
+    no production schema history to preserve). If the schema needs to evolve
+    against a database that already has data, replace this with a real
+    migration tool rather than editing models.py in place.
     """
     Base.metadata.create_all(bind=get_engine())
 

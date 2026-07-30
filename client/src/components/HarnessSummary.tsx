@@ -1,4 +1,4 @@
-import { useHarnessSummary } from '../../api/hooks'
+import { useHarnessSummary } from '../api/hooks'
 
 /**
  * Summary view of the 45-run evaluation harness. See docs/architecture.md

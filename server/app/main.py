@@ -31,9 +31,8 @@ def create_app() -> FastAPI:
         description="Two-role agent system with an independent verifier gate.",
     )
 
-    # TODO(app/main): decide whether table creation belongs here at all once
-    # Alembic migrations are wired up (see db/migrations/README.md) — for now
-    # this keeps local/dev boot simple.
+    # Creates tables on boot if they don't exist yet; see db/session.py's
+    # init_db() docstring for why no migration tool is used for this trial.
     init_db()
 
     app.include_router(routes_health.router)

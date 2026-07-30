@@ -1,4 +1,4 @@
-import { useLeads } from '../../api/hooks'
+import { useLeads } from '../api/hooks'
 
 /** Table of accepted + quarantined leads. See docs/architecture.md section 5 (LEADS). */
 export function LeadsList() {

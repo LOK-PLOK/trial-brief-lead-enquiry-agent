@@ -46,7 +46,11 @@ class StructuredCompletionResponse:
 
 
 class ModelAdapter(ABC):
-    """Common interface implemented by OpenAIAdapter, AnthropicAdapter, OllamaAdapter."""
+    """Common interface every concrete provider adapter must implement.
+
+    No concrete adapter exists yet — see `llm/factory.py` for how one gets
+    selected/constructed once implemented.
+    """
 
     provider_name: str
 

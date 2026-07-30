@@ -22,8 +22,8 @@ puts this file at `/app/app/core/config.py` — one directory shallower than
 `<repo_root>/server/app/core/config.py` locally. Computing from a fixed depth
 would silently point at the wrong directory inside the container; computing
 relative to *this file* keeps `_SERVER_DIR` correct in both places
-(`<repo_root>/server` locally, `/app` in the container — the same
-directory that `docker-compose.yml` mounts `./server/data` onto).
+(`<repo_root>/server` locally, `/app` in the container built by the root
+Dockerfile).
 """
 
 from __future__ import annotations

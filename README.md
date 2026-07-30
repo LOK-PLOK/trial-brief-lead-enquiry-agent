@@ -18,9 +18,6 @@ be filled in.
 - [`docs/Trial_Brief_Paul_Detablan.md`](docs/Trial_Brief_Paul_Detablan.md) — the original brief.
 - [`docs/architecture.md`](docs/architecture.md) — source of truth for system design.
 - [`docs/development-rules.md`](docs/development-rules.md) — source of truth for implementation rules.
-- [`docs/api.md`](docs/api.md) — API contract (to be filled in as endpoints are implemented).
-- [`docs/database.md`](docs/database.md) — database schema reference.
-- [`docs/decisions.md`](docs/decisions.md) — stack/model choice justifications.
 
 ## Repository layout
 
@@ -28,7 +25,7 @@ be filled in.
 server/       FastAPI backend: agent pipeline, tools, LLM adapters, DB, API
 client/       React (Vite + TypeScript) single-page frontend
 evaluation/   Standalone harness that drives the 45-run evaluation + adversarial cases
-docs/         Architecture, API, database, and decision documentation
+docs/         Brief, architecture, and development-rules documentation
 ```
 
 ## Local development
