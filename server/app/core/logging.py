@@ -31,6 +31,42 @@ class _ContextFilter(logging.Filter):
         return True
 
 
+# Attributes every stdlib LogRecord carries (plus our own `run_id`/`stage`,
+# already surfaced explicitly below). Anything else found on a record --
+# i.e. whatever a caller passed via `logger.info(..., extra={...})` -- is
+# stage-specific structured data (e.g. planner/verifier prompt, response,
+# latency_ms, token counts) and gets merged into the JSON payload as-is, so
+# `extra=` is actually observable instead of silently dropped.
+_STANDARD_LOG_RECORD_ATTRS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+        "run_id",
+        "stage",
+    }
+)
+
+
 class _JsonFormatter(logging.Formatter):
     """Minimal dependency-free JSON log formatter.
 
@@ -51,6 +87,10 @@ class _JsonFormatter(logging.Formatter):
             "run_id": getattr(record, "run_id", None),
             "stage": getattr(record, "stage", None),
         }
+        extra_fields = {
+            key: value for key, value in record.__dict__.items() if key not in _STANDARD_LOG_RECORD_ATTRS
+        }
+        payload.update(extra_fields)
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
