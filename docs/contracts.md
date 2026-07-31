@@ -138,12 +138,21 @@ to be LLM-backed internally, but that call is opaque to the Executor's control f
 
 ### Input
 
-`run_plan(plan: Plan, enquiry_text: str) -> ExecutionResult`
+`run_plan(plan: Plan, enquiry_text: str, registry: ToolRegistry) -> ExecutionResult`
 
 - `plan: Plan` — the validated output of §1, iterated in `steps` order — the Executor cannot
   itself skip/reorder/substitute a step; it is literally "iterate `plan.steps`".
 - `enquiry_text: str` — the original raw text, passed through to tools that need it (e.g.
   `parse_enquiry`).
+- `registry: ToolRegistry` — **additive parameter**, not in the original two-argument sketch of
+  this contract. Justification: the Executor must use `ToolRegistry` for *all* tool lookup and
+  must never import a concrete `Tool` subclass (development-rules.md), so it needs a registry
+  instance from somewhere; since `ToolRegistry` itself needs a `ModelAdapter` (for
+  `parse_enquiry`), the only alternative would be for `run_plan()` to construct that adapter
+  itself — which would make the Executor responsible for LLM-provider wiring (contradicting "the
+  Executor contains no LLM calls of its own") and impossible to exercise with mock tools in tests.
+  Passing `registry` in keeps the Executor a pure function of its inputs and fully testable with
+  a fake or mock-populated registry.
 
 ### Output
 
@@ -160,7 +169,10 @@ to be LLM-backed internally, but that call is opaque to the Executor's control f
         "status": "success",
         "result": { "name": "Jane Doe", "email": "jane@example.com", "budget_band": "high" },
         "error": null,
-        "latency_ms": 842.1
+        "validation_errors": null,
+        "latency_ms": 842.1,
+        "started_at": "2026-07-31T02:10:00.000Z",
+        "finished_at": "2026-07-31T02:10:00.842Z"
       }
     ]
   },
@@ -175,6 +187,14 @@ to be LLM-backed internally, but that call is opaque to the Executor's control f
 }
 ```
 
+`ToolCall.validation_errors` and `ToolCall.started_at`/`finished_at` are **additive fields**
+(`server/app/schemas/tool_trace.py`) added during Executor implementation: the task requires every
+tool execution to record start time, end time, and validation errors as structured data, which the
+original `ToolCall` shape (only `latency_ms` + a free-text `error`) could not carry.
+`validation_errors` is populated only when `status="error"` was caused by a `ToolValidationError`
+(the raw `.errors` list); it is `null` for controlled business failures and unexpected exceptions,
+which are still fully described by the free-text `error` field.
+
 ### Validation rules
 
 - For each `PlanStep`: look up the tool by its enum-constrained name via `ToolRegistry.get_tool()`
@@ -183,17 +203,29 @@ to be LLM-backed internally, but that call is opaque to the Executor's control f
   distinct check from the Plan's own schema validation — before the tool's `run()` is ever called,
   catching planner-hallucinated arguments before they reach real execution.
 - Every step, success or failure, produces exactly one `ToolCall` entry in `trace.calls` with
-  `status` (`ToolCallStatus.SUCCESS` / `.ERROR`), `result` or `error`, and a measured `latency_ms`.
-- `final_record` is only populated when all steps in the plan succeed.
+  `status` (`ToolCallStatus.SUCCESS` / `.ERROR`), `result` or `error`, a measured `latency_ms`, and
+  `started_at`/`finished_at` timestamps. The trace accumulates in step order and is returned
+  as-is even when execution stops early, so it is always complete up to (and including) the
+  failing step.
+- `final_record` is only populated when every step in the plan succeeds **and** the plan included
+  all four canonical tools (`parse_enquiry`, `lookup_jurisdiction_rule`, `score_lead`,
+  `write_record`) — a plan that omits one is not an error, it simply yields `final_record: null`.
+- Execution stops at the first failure of any kind; the only way a step goes unexecuted is that an
+  earlier one already failed and halted the loop — the Executor never itself skips a step for any
+  other reason.
 
 ### Error behavior
 
-| Failure | Behavior |
-|---|---|
-| Tool reports business failure (`ToolResult(success=False, error=...)`, e.g. `write_record` duplicate) | Executor **stops** — does not continue with remaining steps — and raises `ToolExecutionError` (or returns `ExecutionResult(error=...)`), feeding into the Repair Loop (§10 of `docs/architecture.md`). |
-| Tool args fail validation against its own `args_schema` | Treated as a tool execution failure at that step; execution stops there. |
-| Unexpected exception inside a tool (not an expected business failure) | Must propagate loudly (per `tools/base.py`'s `Tool.run()` contract) rather than being silently swallowed — this is a bug signal, not a normal control-flow outcome. |
-| Any deviation from the plan (a step skipped/reordered/substituted) | Cannot originate from the Executor itself (it only iterates `plan.steps`) — if the Verifier detects one, it necessarily traces back to a compromised Plan or an Executor bug, which is exactly why the Verifier checks trace-vs-plan independently. |
+Three distinct failure categories are recognized, each converted into the same structured
+`ExecutionResult(error=...)` shape — `run_plan()` never raises on a tool's behalf, so the pipeline
+never crashes and the trace built so far is always returned intact:
+
+| Failure category | Cause | Behavior |
+|---|---|---|
+| **Tool validation failure** | `Tool.execute()` raises `ToolValidationError` — malformed/hallucinated `step.args`, or a buggy `run()` returning a malformed successful result. | Recorded with `status="error"`, structured `validation_errors`, execution stops. |
+| **Controlled tool failure** | `Tool.execute()` returns normally with `ToolResult(success=False, error=...)` (e.g. `write_record` duplicate) — an expected business outcome, not a bug. | Recorded with `status="error"`, `error` set from `ToolResult.error`, `validation_errors=null`, execution stops. |
+| **Unexpected internal exception** | Anything else raised out of `Tool.execute()` — a tool bug (e.g. today's placeholder `NotImplementedError`), a provider timeout inside `parse_enquiry`, or an unknown tool name from the registry. | Logged loudly at ERROR with a full traceback (so it is never silently swallowed), then recorded with `status="error"`, `error=f"{type}: {message}"`, execution stops — the exception itself never propagates out of `run_plan()`. |
+| Any deviation from the plan (a step skipped/reordered/substituted) | Cannot originate from the Executor itself (it only iterates `plan.steps`) — if the Verifier detects one, it necessarily traces back to a compromised Plan or an Executor bug, which is exactly why the Verifier checks trace-vs-plan independently. | — |
 
 ---
 

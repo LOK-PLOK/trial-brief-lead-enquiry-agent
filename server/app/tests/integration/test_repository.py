@@ -57,6 +57,7 @@ class TestCreateAndGetRun:
                 PlanStep(step=1, tool=ToolName.PARSE_ENQUIRY, args={}, rationale="Extract fields."),
             ]
         )
+        now = datetime.now(UTC)
         trace = ToolCallTrace(
             calls=[
                 ToolCall(
@@ -66,6 +67,8 @@ class TestCreateAndGetRun:
                     status="success",
                     result={"name": "Jane Doe"},
                     latency_ms=12.3,
+                    started_at=now,
+                    finished_at=now,
                 )
             ]
         )
