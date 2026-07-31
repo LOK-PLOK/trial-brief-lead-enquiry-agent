@@ -55,9 +55,7 @@ class ModelAdapter(ABC):
     provider_name: str
 
     @abstractmethod
-    def complete_structured(
-        self, request: StructuredCompletionRequest
-    ) -> StructuredCompletionResponse:
+    def complete_structured(self, request: StructuredCompletionRequest) -> StructuredCompletionResponse:
         """Issue one stateless, structured-output LLM call.
 
         Must:

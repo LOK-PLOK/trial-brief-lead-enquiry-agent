@@ -15,9 +15,7 @@ def augment_for_plan_deviation(base_prompt: str, deviation_details: str) -> str:
     raise NotImplementedError
 
 
-def augment_for_fabrication(
-    base_prompt: str, fabricated_fields: list[str]
-) -> str:
+def augment_for_fabrication(base_prompt: str, fabricated_fields: list[str]) -> str:
     """TODO(agent/repair): implement. Ask parse_enquiry to re-extract with the
     flagged fields explicitly called out, defaulting to null rather than
     guessing."""

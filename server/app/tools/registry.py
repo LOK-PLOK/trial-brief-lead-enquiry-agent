@@ -49,8 +49,7 @@ class ToolRegistry:
     def __init__(self, *, adapter: ModelAdapter | None = None) -> None:
         self._adapter = adapter
         self._tools: dict[str, Tool] = {
-            name: self._instantiate(tool_cls)
-            for name, tool_cls in sorted(Tool.registered_classes().items())
+            name: self._instantiate(tool_cls) for name, tool_cls in sorted(Tool.registered_classes().items())
         }
 
     def _instantiate(self, tool_cls: type[Tool]) -> Tool:
@@ -90,6 +89,4 @@ class ToolRegistry:
         `Tool.manifest_entry()`), sorted by name so the order is
         deterministic regardless of module import order.
         """
-        return [
-            tool_cls.manifest_entry() for _, tool_cls in sorted(Tool.registered_classes().items())
-        ]
+        return [tool_cls.manifest_entry() for _, tool_cls in sorted(Tool.registered_classes().items())]

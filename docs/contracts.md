@@ -474,7 +474,7 @@ changing this module alone.
 
 | Function | Signature | Purpose |
 |---|---|---|
-| `create_run` | `(db: Session, run: RunResult) -> Run` | Map a `RunResult` (§ below) to a `Run` ORM row (+ its `LlmCall` children), insert, commit, return the persisted row. |
+| `create_run` | `(db: Session, run: RunResult, *, harness_batch_id: str \| None = None) -> Run` | Map a `RunResult` (§ below) to a `Run` ORM row (+ its `LlmCall` children), insert, commit, return the persisted row. `harness_batch_id` is optional because `RunResult` itself doesn't carry it (a single run doesn't know which batch it belongs to); passing it links the row without a separate update call. |
 | `get_run` | `(db: Session, run_id: str) -> Run \| None` | Fetch a single run by id. |
 | `list_runs` | `(db: Session, *, limit: int = 50, offset: int = 0) -> list[Run]` | Paginated list, most recent first. |
 | `find_lead_by_dedupe_hash` | `(db: Session, dedupe_hash: str) -> Lead \| None` | Used by `tools/write_record.py`'s duplicate check. |
@@ -518,6 +518,10 @@ Output of `create_lead` (a `Lead` ORM row, conceptually):
   `create_lead` — no ad hoc queries elsewhere in `tools/write_record.py` or `agent/`.
 - Query functions (`get_run`, `list_runs`, `list_leads`, `get_latest_harness_batch`) never mutate
   state.
+- `Run.model_provider`/`model_name` (top-level columns, §8) have no direct `RunResult` field —
+  `create_run` takes them from the *first* entry in `run.llm_calls` (conventionally the planner
+  call), or leaves them `None` if there were no LLM calls at all (e.g. an early executor failure).
+  This is a repository-level mapping decision, not a schema change.
 
 ### Failure modes
 
@@ -653,7 +657,9 @@ output verbatim.
   "verifier_confidence": 0.92,
   "verifier_reason": "...",
   "fabrication_detected": false,
+  "fabricated_fields": [],
   "plan_deviation_detected": false,
+  "deviation_details": null,
   "repair_attempted": false,
   "repair_succeeded": null,
   "final_status": "completed",
@@ -669,7 +675,12 @@ output verbatim.
 ```
 
 **Validation rules:** `id` PK (UUID default); `final_status` ∈ `{completed, quarantined, error}`;
-`harness_batch_id` FK → `harness_batches.id`, nullable (null for live API runs).
+`harness_batch_id` FK → `harness_batches.id`, nullable (null for live API runs);
+`fabricated_fields`/`deviation_details` complete the model's coverage of `VerifierDecision` (§3),
+which already includes both — added so the DB row never silently drops verifier evidence the
+harness's fabrication-rate analysis needs; both nullable, both `null`/`[]` when no verifier ran.
+Indexed on `(enquiry_id, repeat_index)` to back the harness's resumability check (§ below,
+`harness_batches` failure modes) and on `harness_batch_id`.
 
 **Failure modes:** inserting with a `harness_batch_id` that doesn't exist → FK integrity error
 (caller must create the batch row first, §6).

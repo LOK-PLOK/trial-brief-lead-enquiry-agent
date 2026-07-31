@@ -28,9 +28,7 @@ class _FakeAdapter(ModelAdapter):
 
     provider_name: str = "fake"
 
-    def complete_structured(
-        self, request: StructuredCompletionRequest
-    ) -> StructuredCompletionResponse:
+    def complete_structured(self, request: StructuredCompletionRequest) -> StructuredCompletionResponse:
         raise NotImplementedError
 
 

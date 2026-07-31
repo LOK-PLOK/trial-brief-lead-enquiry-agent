@@ -10,6 +10,7 @@ which reduces "database is locked" errors under light concurrent access
 from __future__ import annotations
 
 from collections.abc import Generator
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
@@ -80,9 +81,38 @@ def init_db() -> None:
 
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency: yields a session, always closed after the request.
-    See server/app/api/deps.py for the wired-up dependency."""
+    See server/app/api/deps.py for the wired-up dependency. Does not
+    auto-commit -- route handlers (via db/repository.py) are responsible for
+    committing their own writes, same as `session_scope()` below."""
     session = get_session_factory()()
     try:
         yield session
+    finally:
+        session.close()
+
+
+@contextmanager
+def session_scope() -> Generator[Session, None, None]:
+    """Context-manager session for non-FastAPI callers (evaluation harness
+    scripts, one-off tools, tests): commits on clean exit, rolls back and
+    re-raises on any exception, always closes.
+
+    Important: every `db/repository.py` create/write function commits its
+    own write immediately (per docs/contracts.md section 6), so this does
+    *not* provide multi-call atomicity across several repository calls --
+    an earlier call's insert in the same `with` block is already durably
+    committed by the time a later statement raises, and rollback cannot
+    undo it. What this guarantees is: (1) any *uncommitted* work added
+    directly to the session (e.g. `session.add(...)` without going through
+    `repository.py`) is rolled back on exception, and (2) the session is
+    always closed, regardless of which path is taken.
+    """
+    session = get_session_factory()()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()

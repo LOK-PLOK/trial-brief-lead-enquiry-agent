@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -67,7 +67,17 @@ class Run(Base):
     verifier_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     verifier_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     fabrication_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    # `fabricated_fields`/`deviation_details` complete the model's coverage of
+    # `VerifierDecision` (docs/contracts.md section 3), which already includes
+    # both -- without these columns the DB row would silently drop evidence
+    # the harness's fabrication-rate analysis needs (development-rules.md:
+    # "Prioritize correctness and observability"). Additive, nullable, and
+    # doesn't change any existing column, so it doesn't affect the ERD in
+    # docs/architecture.md section 5 beyond filling a gap versus its own
+    # Verifier contract.
+    fabricated_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
     plan_deviation_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    deviation_details: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     repair_attempted: Mapped[bool] = mapped_column(Boolean, default=False)
     repair_succeeded: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -82,15 +92,23 @@ class Run(Base):
     model_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
     harness_batch_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("harness_batches.id"), nullable=True
+        String, ForeignKey("harness_batches.id"), nullable=True, index=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     harness_batch: Mapped[HarnessBatch | None] = relationship(back_populates="runs")
-    llm_calls: Mapped[list[LlmCall]] = relationship(back_populates="run")
+    # Child log rows belong entirely to their run -- deleting a run should
+    # delete its LLM call log with it, never leave orphaned rows.
+    llm_calls: Mapped[list[LlmCall]] = relationship(back_populates="run", cascade="all, delete-orphan")
     lead: Mapped[Lead | None] = relationship(back_populates="source_run")
+
+    __table_args__ = (
+        # Backs the evaluation harness's resumability check (docs/architecture.md
+        # section 11: "skips (enquiry_id, repeat_index) pairs already completed").
+        Index("ix_runs_enquiry_id_repeat_index", "enquiry_id", "repeat_index"),
+    )
 
 
 class LlmCall(Base):
@@ -144,7 +162,7 @@ class Lead(Base):
     status: Mapped[str] = mapped_column(String)  # accepted|quarantined
 
     source_run_id: Mapped[str | None] = mapped_column(
-        String, ForeignKey("runs.id"), nullable=True
+        String, ForeignKey("runs.id"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 

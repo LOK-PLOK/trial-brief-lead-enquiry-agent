@@ -188,6 +188,4 @@ def test_abstract_intermediate_subclass_is_not_registered() -> None:
         """Doesn't implement `run()` -- should be skipped, not registered,
         and should not even go through attribute validation."""
 
-    assert "AbstractIntermediateTool" not in {
-        cls.__name__ for cls in Tool.registered_classes().values()
-    }
+    assert "AbstractIntermediateTool" not in {cls.__name__ for cls in Tool.registered_classes().values()}

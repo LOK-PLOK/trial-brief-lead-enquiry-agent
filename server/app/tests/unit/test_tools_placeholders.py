@@ -31,9 +31,7 @@ VALID_SCORE_RESULT = {"score": 78, "breakdown": {"budget": 40, "urgency": 20, "j
 class _FakeAdapter(ModelAdapter):
     provider_name: str = "fake"
 
-    def complete_structured(
-        self, request: StructuredCompletionRequest
-    ) -> StructuredCompletionResponse:
+    def complete_structured(self, request: StructuredCompletionRequest) -> StructuredCompletionResponse:
         raise NotImplementedError
 
 
