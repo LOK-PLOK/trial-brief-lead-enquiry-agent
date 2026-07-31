@@ -18,7 +18,7 @@ export function useCreateRun() {
 }
 
 export function useRuns() {
-  return useQuery({ queryKey: ['runs'], queryFn: api.listRuns })
+  return useQuery({ queryKey: ['runs'], queryFn: api.listRuns, retry: false })
 }
 
 export function useRun(runId: string | null) {
@@ -26,13 +26,22 @@ export function useRun(runId: string | null) {
     queryKey: ['runs', runId],
     queryFn: () => api.getRun(runId!),
     enabled: runId !== null,
+    retry: false,
   })
 }
 
 export function useHarnessSummary() {
-  return useQuery({ queryKey: ['harness', 'summary'], queryFn: api.getHarnessSummary })
+  return useQuery({
+    queryKey: ['harness', 'summary'],
+    queryFn: api.getHarnessSummary,
+    retry: false,
+  })
 }
 
 export function useLeads(status?: 'accepted' | 'quarantined') {
-  return useQuery({ queryKey: ['leads', status], queryFn: () => api.listLeads(status) })
+  return useQuery({
+    queryKey: ['leads', status],
+    queryFn: () => api.listLeads(status),
+    retry: false,
+  })
 }

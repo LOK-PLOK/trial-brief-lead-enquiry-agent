@@ -85,8 +85,77 @@ export interface RunSummary {
   created_at: string | null
 }
 
+/**
+ * Mirrors evaluation/metrics.py's `compute_harness_metrics()` output. Rate
+ * fields are `null` when the metric is architecturally unmeasurable (see
+ * `notes`) rather than a fabricated number -- render `null` as "n/a", not 0.
+ */
+export interface HarnessVarianceByEnquiry {
+  n_repeats: number
+  final_statuses: string[]
+  latency_ms_stdev: number
+  cost_usd_stdev: number
+  tokens_stdev: number
+  score_stdev: number | null
+  distinct_final_record_count: number
+}
+
+export interface HarnessVariance {
+  by_enquiry: Record<string, HarnessVarianceByEnquiry>
+  overall_latency_ms_stdev: number
+  overall_cost_usd_stdev: number
+  overall_tokens_stdev: number
+}
+
+export interface HarnessMetrics {
+  n_runs: number
+  completion_rate: number | null
+  quarantined_rate: number | null
+  error_rate: number | null
+  pass_rate: number | null
+  fabrication_rate: number | null
+  fabrication_caught_rate: number | null
+  planner_schema_breach_rate: number | null
+  extractor_schema_breach_rate: number | null
+  tool_selection_accuracy: number | null
+  repair_attempted_rate: number | null
+  repair_success_rate: number | null
+  mean_latency_ms: number
+  median_latency_ms: number
+  p95_latency_ms: number
+  mean_tokens: number
+  mean_cost_usd: number
+  variance: HarnessVariance
+  notes: string[]
+}
+
+/** Mirrors the `harness_batches` row returned by GET /api/harness/summary. */
 export interface HarnessSummary {
-  // TODO(client/api): fill in once evaluation/metrics.py's output shape
-  // (docs/architecture.md section 11) is finalized.
-  [metric: string]: unknown
+  id: string
+  started_at: string | null
+  finished_at: string | null
+  n_runs: number
+  metrics: HarnessMetrics | null
+  config_snapshot: Record<string, unknown> | null
+}
+
+export type LeadStatus = 'accepted' | 'quarantined'
+
+/** Mirrors the `leads` table. See docs/contracts.md "Database Entities". */
+export interface Lead {
+  id: string
+  dedupe_hash: string
+  name: string | null
+  email: string | null
+  phone: string | null
+  country: string | null
+  budget_band: string | null
+  asset_interest: string | null
+  urgency: string | null
+  score: number | null
+  score_breakdown: Record<string, unknown> | null
+  jurisdiction_rule: Record<string, unknown> | null
+  status: LeadStatus
+  source_run_id: string | null
+  created_at: string | null
 }

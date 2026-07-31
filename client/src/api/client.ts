@@ -1,19 +1,28 @@
 /**
- * Thin typed fetch client for the FastAPI JSON API. See docs/api.md and
- * docs/architecture.md section 3.
+ * Thin typed fetch client for the FastAPI JSON API. See docs/contracts.md
+ * section 7 ("API Endpoints") and docs/architecture.md section 3.
  *
  * Relative paths (`/api/...`) work unmodified both in dev (proxied by Vite,
  * see vite.config.ts) and in production (same-origin, single container).
  */
 
-import type { HarnessSummary, RunResult, RunSummary } from './types'
+import type { HarnessSummary, Lead, RunResult, RunSummary } from './types'
 
-class ApiError extends Error {
+/**
+ * Raised whenever the API responds with a non-2xx status. `detail` carries
+ * the parsed JSON error body when the response was JSON (FastAPI's
+ * exception handlers return `{"detail": "..."}` per docs/contracts.md
+ * section 3), otherwise the raw response text.
+ */
+export class ApiError extends Error {
   status: number
+  detail: unknown
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, detail?: unknown) {
     super(message)
+    this.name = 'ApiError'
     this.status = status
+    this.detail = detail
   }
 }
 
@@ -22,10 +31,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })
+
   if (!res.ok) {
-    // TODO(client/api): parse the structured error body (docs/architecture.md
-    // section 3's exception handlers) instead of just the status text.
-    throw new ApiError(res.status, await res.text())
+    const bodyText = await res.text()
+    let detail: unknown = bodyText
+    let message = bodyText || res.statusText || `Request failed with status ${res.status}`
+    try {
+      const parsed: unknown = bodyText ? JSON.parse(bodyText) : undefined
+      if (parsed !== undefined) {
+        detail = parsed
+        if (parsed && typeof parsed === 'object' && 'detail' in parsed) {
+          const parsedDetail = (parsed as { detail: unknown }).detail
+          message = typeof parsedDetail === 'string' ? parsedDetail : JSON.stringify(parsedDetail)
+        }
+      }
+    } catch {
+      // Body wasn't JSON; fall back to the raw text already assigned above.
+    }
+    throw new ApiError(res.status, message, detail)
+  }
+
+  if (res.status === 204) {
+    return undefined as T
   }
   return res.json() as Promise<T>
 }
@@ -49,7 +76,7 @@ export function getHarnessSummary(): Promise<HarnessSummary> {
   return request<HarnessSummary>('/api/harness/summary')
 }
 
-export function listLeads(status?: 'accepted' | 'quarantined') {
+export function listLeads(status?: 'accepted' | 'quarantined'): Promise<Lead[]> {
   const qs = status ? `?status=${status}` : ''
-  return request(`/api/leads${qs}`)
+  return request<Lead[]>(`/api/leads${qs}`)
 }

@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+# Runs the evaluation/ package's own test suite. server/app/tests/ has its
+# own, separately-configured suite (server/pyproject.toml) run from within
+# server/ -- the two are independent invocations, never mixed together,
+# since evaluation/ sits outside the server/ package on purpose (it imports
+# `app.*` as a client of the backend, not as part of it).
+testpaths = ["evaluation/tests"]
+# `server` on the path so `import app...` (evaluation/harness.py's own
+# import) resolves the same way it does when running
+# `PYTHONPATH=server python -m evaluation.harness` from the repo root; `.`
+# so `import evaluation...` resolves too.
+pythonpath = ["server", "."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

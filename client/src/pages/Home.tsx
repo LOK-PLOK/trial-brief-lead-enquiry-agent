@@ -4,6 +4,9 @@ import { RunPanel } from '../components/RunPanel'
 import { HarnessSummary } from '../components/HarnessSummary'
 import { AdversarialReport } from '../components/AdversarialReport'
 import { LeadsList } from '../components/LeadsList'
+import { QueryState } from '../components/common/QueryState'
+import { describeError } from '../api/errors'
+import type { FinalStatus } from '../api/types'
 
 type Tab = 'run' | 'history' | 'harness' | 'adversarial'
 
@@ -13,6 +16,12 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'harness', label: 'Harness Summary' },
   { id: 'adversarial', label: 'Adversarial' },
 ]
+
+const STATUS_BADGE: Record<FinalStatus, string> = {
+  completed: 'bg-green-100 text-green-700',
+  quarantined: 'bg-amber-100 text-amber-700',
+  error: 'bg-red-100 text-red-700',
+}
 
 /**
  * The single page required by the brief (docs/architecture.md section 4):
@@ -28,11 +37,28 @@ export function Home() {
   const runsQuery = useRuns()
   const selectedRun = useRun(selectedRunId)
 
-  // TODO(client/pages/Home): once POST /api/runs works, set selectedRunId
-  // from createRun's result so the RunPanel below updates immediately.
+  // The most recently created run takes priority over a selected history
+  // row; selecting a history row resets the mutation so its (now stale)
+  // data stops shadowing the freshly-selected run.
+  const displayedRun = createRun.data ?? selectedRun.data ?? null
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    createRun.mutate(enquiryText)
+    if (!enquiryText.trim() || createRun.isPending) return
+    createRun.mutate(enquiryText, {
+      onSuccess: (result) => setSelectedRunId(result.id),
+    })
+  }
+
+  const handleSelectHistoryRun = (runId: string) => {
+    createRun.reset()
+    setSelectedRunId(runId)
+  }
+
+  const handleLoadAdversarialEnquiry = (text: string) => {
+    createRun.reset()
+    setEnquiryText(text)
+    setActiveTab('run')
   }
 
   return (
@@ -71,40 +97,89 @@ export function Home() {
               rows={4}
               className="w-full rounded-lg border border-slate-300 p-3 text-sm"
             />
-            <button
-              type="submit"
-              disabled={createRun.isPending}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {createRun.isPending ? 'Running…' : 'Run'}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={createRun.isPending || !enquiryText.trim()}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {createRun.isPending ? 'Running…' : 'Run'}
+              </button>
+              {createRun.isPending && (
+                <span className="text-xs text-slate-400">Running the pipeline…</span>
+              )}
+            </div>
           </form>
-          <RunPanel run={createRun.data ?? selectedRun.data ?? null} />
+
+          {createRun.isError && (
+            <p
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+            >
+              {describeError(createRun.error)}
+            </p>
+          )}
+
+          <RunPanel run={displayedRun} />
         </div>
       )}
 
       {activeTab === 'history' && (
         <div className="space-y-4">
-          {/* TODO(client/pages/Home): render runsQuery.data as a proper
-              clickable list (rows below are a placeholder), then show
-              <RunPanel run={selectedRun.data ?? null} /> underneath. */}
-          <ul className="text-sm text-slate-400">
-            {(runsQuery.data ?? []).map((run) => (
-              <li key={run.id}>
-                <button type="button" onClick={() => setSelectedRunId(run.id)}>
-                  TODO: {run.id}
-                </button>
-              </li>
-            ))}
-            {(runsQuery.data ?? []).length === 0 && <li>TODO: render run history.</li>}
-          </ul>
+          <QueryState
+            isLoading={runsQuery.isLoading}
+            error={runsQuery.error}
+            loadingLabel="Loading run history…"
+          >
+            {(!runsQuery.data || runsQuery.data.length === 0) && (
+              <p className="text-sm text-slate-400">No runs yet.</p>
+            )}
+            {runsQuery.data && runsQuery.data.length > 0 && (
+              <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                {runsQuery.data.map((run) => (
+                  <li key={run.id}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectHistoryRun(run.id)}
+                      className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50 ${
+                        selectedRunId === run.id ? 'bg-slate-50' : ''
+                      }`}
+                    >
+                      <span className="font-mono text-xs text-slate-500">{run.id.slice(0, 8)}</span>
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[run.final_status]}`}
+                      >
+                        {run.final_status}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        ${run.total_cost_usd.toFixed(6)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </QueryState>
+
+          {selectedRunId && !createRun.data && (
+            <QueryState
+              isLoading={selectedRun.isLoading}
+              error={selectedRun.error}
+              loadingLabel="Loading run…"
+            >
+              <RunPanel run={selectedRun.data ?? null} />
+            </QueryState>
+          )}
+
           <LeadsList />
         </div>
       )}
 
       {activeTab === 'harness' && <HarnessSummary />}
 
-      {activeTab === 'adversarial' && <AdversarialReport />}
+      {activeTab === 'adversarial' && (
+        <AdversarialReport onLoadEnquiry={handleLoadAdversarialEnquiry} />
+      )}
     </div>
   )
 }

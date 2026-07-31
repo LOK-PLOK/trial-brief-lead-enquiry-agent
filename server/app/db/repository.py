@@ -10,6 +10,7 @@ contract each function below must satisfy.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from sqlalchemy import select
@@ -162,3 +163,75 @@ def get_latest_harness_batch(db: Session) -> HarnessBatch | None:
     GET /api/harness/summary. `None` if no batch has ever been run."""
     stmt = select(HarnessBatch).order_by(HarnessBatch.started_at.desc()).limit(1)
     return db.scalars(stmt).first()
+
+
+def get_harness_batch(db: Session, harness_batch_id: str) -> HarnessBatch | None:
+    """Fetch a single harness batch by id, or `None` if it doesn't exist.
+
+    Additive (docs/contracts.md section 6 predates this): needed by
+    evaluation/harness.py to resume a specific, previously-started batch
+    (rather than only ever reading "whatever is latest"), so an interrupted
+    45-run harness can be resumed by id rather than only by convention.
+    """
+    return db.get(HarnessBatch, harness_batch_id)
+
+
+def find_run_by_batch_position(
+    db: Session, harness_batch_id: str, enquiry_id: str, repeat_index: int
+) -> Run | None:
+    """Has this `(enquiry_id, repeat_index)` pair already been executed
+    within this specific harness batch? Backs evaluation/harness.py's
+    resumability check (docs/architecture.md section 11: "skips
+    (enquiry_id, repeat_index) pairs already completed").
+
+    Additive (docs/contracts.md section 6 predates this): scoped by
+    `harness_batch_id` as well as `(enquiry_id, repeat_index)` -- the same
+    enquiry/repeat pair can legitimately also appear in a different batch,
+    or as a one-off live API run with no batch at all, neither of which
+    should count as "already done" for *this* batch's resumability.
+    Backed by the existing `ix_runs_enquiry_id_repeat_index` index
+    (db/models.py) plus an equality filter on `harness_batch_id`.
+    """
+    stmt = select(Run).where(
+        Run.harness_batch_id == harness_batch_id,
+        Run.enquiry_id == enquiry_id,
+        Run.repeat_index == repeat_index,
+    )
+    return db.scalars(stmt).first()
+
+
+def list_runs_for_batch(db: Session, harness_batch_id: str) -> list[Run]:
+    """All runs belonging to one harness batch, oldest first -- the raw
+    material evaluation/metrics.py aggregates into the batch's summary
+    metrics. Never mutates state.
+
+    Additive (docs/contracts.md section 6 predates this): the harness needs
+    to read back exactly the rows it just wrote, scoped to its own batch,
+    which none of the existing query functions (`list_runs`, unscoped and
+    paginated for the UI's history view) provide.
+    """
+    stmt = select(Run).where(Run.harness_batch_id == harness_batch_id).order_by(Run.created_at.asc())
+    return list(db.scalars(stmt).all())
+
+
+def finish_harness_batch(db: Session, harness_batch_id: str, *, metrics: dict) -> HarnessBatch:
+    """Stamp a harness batch as complete: sets `finished_at` (now, UTC) and
+    `metrics` (the computed summary from evaluation/metrics.py), commits,
+    returns the refreshed row.
+
+    Additive (docs/contracts.md section 6 predates this): `create_harness_batch`
+    alone can only ever insert a fresh row at the *start* of a batch, before
+    any metrics exist; this is the corresponding "close out" call once the
+    45 runs are done, kept in repository.py rather than evaluation/harness.py
+    mutating the ORM row directly, per this module's own "all reads/writes ...
+    go through here" rule.
+
+    Raises `ValueError` if `harness_batch_id` doesn't exist -- callers must
+    have created the batch first via `create_harness_batch`.
+    """
+    batch = db.get(HarnessBatch, harness_batch_id)
+    if batch is None:
+        raise ValueError(f"No harness_batches row with id {harness_batch_id!r}.")
+    batch.finished_at = datetime.now(UTC)
+    batch.metrics = metrics
+    return _add_commit_refresh(db, batch)

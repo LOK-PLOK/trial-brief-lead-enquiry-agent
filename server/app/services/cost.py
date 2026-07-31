@@ -12,8 +12,12 @@ from app.schemas.run import LlmCallUsage
 
 
 def aggregate_usage(calls: list[LlmCallUsage]) -> dict[str, float]:
-    """TODO(services/cost): return
-    {"total_tokens": ..., "total_cost_usd": ..., "total_latency_ms": ...}
-    summed across `calls`. Pure function, no I/O.
-    """
-    raise NotImplementedError
+    """Sum `calls` into the three per-run totals `RunResult` carries
+    (`total_tokens`, `total_cost_usd`, `total_latency_ms`). Pure function,
+    no I/O -- returns all-zero totals for an empty list (e.g. a run that
+    failed before any LLM call was made)."""
+    return {
+        "total_tokens": float(sum(call.prompt_tokens + call.completion_tokens for call in calls)),
+        "total_cost_usd": sum(call.cost_usd for call in calls),
+        "total_latency_ms": sum(call.latency_ms for call in calls),
+    }

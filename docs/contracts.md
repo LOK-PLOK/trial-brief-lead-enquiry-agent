@@ -514,6 +514,10 @@ changing this module alone.
 | `list_leads` | `(db: Session, *, status: str \| None = None) -> list[Lead]` | Optionally filter by `accepted`/`quarantined`. |
 | `create_harness_batch` | `(db: Session, **fields) -> HarnessBatch` | Insert a new harness batch row. |
 | `get_latest_harness_batch` | `(db: Session) -> HarnessBatch \| None` | Backs `GET /api/harness/summary`. |
+| `get_harness_batch` | `(db: Session, harness_batch_id: str) -> HarnessBatch \| None` | **Additive** (Evaluation Harness task): fetch a specific batch by id, so an interrupted harness run can be resumed by id rather than only by "whatever is latest". |
+| `find_run_by_batch_position` | `(db: Session, harness_batch_id: str, enquiry_id: str, repeat_index: int) -> Run \| None` | **Additive** (Evaluation Harness task): backs the harness's resumability check -- has this `(enquiry_id, repeat_index)` pair already run *within this batch*? Scoped by `harness_batch_id` as well, since the same pair may legitimately also exist in a different batch or as a one-off live run. |
+| `list_runs_for_batch` | `(db: Session, harness_batch_id: str) -> list[Run]` | **Additive** (Evaluation Harness task): every run belonging to one batch, oldest first -- the raw material `evaluation/metrics.py` aggregates. |
+| `finish_harness_batch` | `(db: Session, harness_batch_id: str, *, metrics: dict) -> HarnessBatch` | **Additive** (Evaluation Harness task): stamps `finished_at`/`metrics` once all runs in the batch are done -- the "close out" counterpart to `create_harness_batch`'s "open" call. |
 
 ### JSON example
 
@@ -559,9 +563,10 @@ Output of `create_lead` (a `Lead` ORM row, conceptually):
 
 | Failure | Behavior |
 |---|---|
-| `get_run`/`find_lead_by_dedupe_hash`/`get_latest_harness_batch` — no matching row | Return `None`, never raise. |
+| `get_run`/`find_lead_by_dedupe_hash`/`get_latest_harness_batch`/`get_harness_batch`/`find_run_by_batch_position` — no matching row | Return `None`, never raise. |
 | `create_lead` called with a `dedupe_hash` that already exists | The `leads.dedupe_hash` unique constraint (§8) raises an `IntegrityError` at the DB layer — callers (`tools/write_record.py`) must check via `find_lead_by_dedupe_hash` *first* and treat a duplicate as an expected `ToolResult(success=False, error="duplicate")`, not rely on catching the DB exception. |
 | `create_run` called with a `RunResult` referencing an unknown `harness_batch_id` | FK constraint violation — the caller (harness/orchestrator) is responsible for creating the `HarnessBatch` row first. |
+| `finish_harness_batch` called with an unknown `harness_batch_id` | Raises `ValueError` — the caller must have created the batch first via `create_harness_batch`. |
 
 ---
 
