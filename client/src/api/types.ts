@@ -32,11 +32,18 @@ export interface ToolCallTrace {
   calls: ToolCall[]
 }
 
+export interface ExtractedFieldVerdict {
+  field: string
+  label: 'SUPPORTED' | 'CONTRADICTED' | 'INSUFFICIENT_EVIDENCE'
+  note?: string
+}
+
 export interface VerifierDecision {
   pass: boolean
   confidence: number
   fabrication_detected: boolean
   fabricated_fields: string[]
+  extracted_field_verdicts?: ExtractedFieldVerdict[]
   plan_deviation_detected: boolean
   deviation_details: string | null
   reason: string
@@ -68,6 +75,9 @@ export interface RunResult {
   repair_attempted: boolean
   repair_succeeded: boolean | null
   final_status: FinalStatus
+  error_type: string | null
+  error_message: string | null
+  traceback: string | null
   llm_calls: LlmCallUsage[]
   total_tokens: number
   total_cost_usd: number
@@ -137,6 +147,122 @@ export interface HarnessSummary {
   n_runs: number
   metrics: HarnessMetrics | null
   config_snapshot: Record<string, unknown> | null
+}
+
+export interface HarnessDataset {
+  id: string
+  label: string
+  description: string
+  n_enquiries: number
+  default_repeats: number
+  requires_upload: boolean
+}
+
+export interface HarnessParsedEnquiry {
+  id: string
+  text: string
+}
+
+export interface HarnessParseResult {
+  format_detected: string
+  n_enquiries: number
+  enquiries: HarnessParsedEnquiry[]
+}
+
+export type HarnessJobStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
+
+export interface HarnessJob {
+  id: string
+  dataset_id: string
+  dataset_label: string
+  n_repeats: number
+  n_total: number
+  completed: number
+  status: HarnessJobStatus
+  batch_id: string | null
+  current_enquiry_id: string | null
+  phase: string
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+  cancel_requested: boolean
+}
+
+export interface HarnessRunRow {
+  id: string
+  enquiry_id: string | null
+  repeat_index: number | null
+  final_status: FinalStatus
+  score: number | null
+  repair_attempted: boolean
+  repair_succeeded: boolean | null
+  total_latency_ms: number
+  total_cost_usd: number
+  total_tokens: number
+  verifier_pass: boolean | null
+  confidence: number | null
+  reason: string
+  error_type: string | null
+  error_message: string | null
+  traceback: string | null
+  fabrication_detected: boolean
+  fabricated_fields: string[]
+  plan_deviation_detected: boolean
+  created_at: string | null
+}
+
+export interface PipelineHealth {
+  planner: string
+  executor: string
+  tools: string
+  verifier: string
+  repair: string
+  note: string | null
+}
+
+export interface HarnessDashboard {
+  batch_id: string
+  dataset_id: string | null
+  dataset_label: string | null
+  n_repeats: number | null
+  started_at: string | null
+  finished_at: string | null
+  duration_ms: number | null
+  statistics: {
+    total: number
+    passed: number
+    quarantined: number
+    failed: number
+    success_rate: number | null
+  }
+  cost: {
+    total_tokens: number
+    total_cost_usd: number
+    average_cost_per_enquiry: number
+  }
+  performance: {
+    average_runtime_ms: number
+    fastest_ms: number | null
+    slowest_ms: number | null
+  }
+  failure_breakdown: Record<string, number>
+  pipeline_health: PipelineHealth
+  charts: {
+    pass_vs_quarantined: { passed: number; quarantined: number; failed: number }
+    repair_success_rate: number | null
+    failures_by_field: Record<string, number>
+    average_runtime_ms: number
+    cost_per_stage: Record<string, number>
+  }
+  metrics: HarnessMetrics | null
+  runs: HarnessRunRow[]
+}
+
+export interface TimelineEvent {
+  stage: string
+  label: string
+  status: 'ok' | 'warn' | 'error' | string
+  detail: string
 }
 
 export type LeadStatus = 'accepted' | 'quarantined'

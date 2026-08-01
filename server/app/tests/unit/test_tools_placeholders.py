@@ -1,7 +1,10 @@
-"""Unit tests proving each of the four tools does exactly what the brief for
-this stage requires: validate input via `Tool.execute()`, then raise
-`NotImplementedError` -- no business logic. Invalid input must never reach
-that point; it must raise `ToolValidationError` instead.
+"""Unit tests proving each of the four tools' `Tool.execute()` validation
+boundary still behaves correctly now that real business logic is
+implemented: invalid input must never reach `run()` -- it must raise
+`ToolValidationError` instead. Deeper business-logic coverage for each
+tool's real behavior lives in its own dedicated test module:
+test_parse_enquiry.py, test_lookup_jurisdiction_rule.py, test_score_lead.py,
+test_write_record.py.
 """
 
 from __future__ import annotations
@@ -36,7 +39,13 @@ class _FakeAdapter(ModelAdapter):
 
 
 class TestParseEnquiryTool:
-    def test_valid_args_reach_run_and_raise_not_implemented(self) -> None:
+    def test_valid_args_reach_run_and_return_a_controlled_failure_for_a_broken_adapter(self) -> None:
+        """The fake adapter here always raises `NotImplementedError`, which
+        is not one of `ParseEnquiryTool.run()`'s caught adapter-failure
+        types (`LLMProviderError`/`LLMSchemaValidationError`) -- confirming
+        validation passed (`run()` was reached at all) without asserting
+        anything about a *real* adapter's behavior, which
+        test_parse_enquiry.py covers directly."""
         tool = ParseEnquiryTool(adapter=_FakeAdapter())
         with pytest.raises(NotImplementedError):
             tool.execute({"enquiry_text": "Hi, I'm interested in whisky casks..."})
@@ -48,10 +57,11 @@ class TestParseEnquiryTool:
 
 
 class TestLookupJurisdictionRuleTool:
-    def test_valid_args_reach_run_and_raise_not_implemented(self) -> None:
+    def test_valid_args_reach_run_and_return_a_real_result(self) -> None:
         tool = LookupJurisdictionRuleTool()
-        with pytest.raises(NotImplementedError):
-            tool.execute({"country": "Singapore"})
+        result = tool.execute({"country": "Singapore"})
+        assert result.success is True
+        assert result.data["country"] == "Singapore"
 
     def test_missing_required_field_raises_validation_error(self) -> None:
         tool = LookupJurisdictionRuleTool()
@@ -65,10 +75,11 @@ class TestLookupJurisdictionRuleTool:
 
 
 class TestScoreLeadTool:
-    def test_valid_args_reach_run_and_raise_not_implemented(self) -> None:
+    def test_valid_args_reach_run_and_return_a_real_score(self) -> None:
         tool = ScoreLeadTool()
-        with pytest.raises(NotImplementedError):
-            tool.execute({"extracted": {}, "jurisdiction_rule": VALID_JURISDICTION_RULE})
+        result = tool.execute({"extracted": {}, "jurisdiction_rule": VALID_JURISDICTION_RULE})
+        assert result.success is True
+        assert isinstance(result.data["score"], int)
 
     def test_missing_required_field_raises_validation_error(self) -> None:
         tool = ScoreLeadTool()
@@ -82,17 +93,6 @@ class TestScoreLeadTool:
 
 
 class TestWriteRecordTool:
-    def test_valid_args_reach_run_and_raise_not_implemented(self) -> None:
-        tool = WriteRecordTool()
-        with pytest.raises(NotImplementedError):
-            tool.execute(
-                {
-                    "extracted": {},
-                    "jurisdiction_rule": VALID_JURISDICTION_RULE,
-                    "score": VALID_SCORE_RESULT,
-                }
-            )
-
     def test_missing_required_field_raises_validation_error(self) -> None:
         tool = WriteRecordTool()
         with pytest.raises(ToolValidationError):
@@ -102,3 +102,9 @@ class TestWriteRecordTool:
         tool = WriteRecordTool()
         with pytest.raises(ToolValidationError):
             tool.execute({"extracted": {}, "jurisdiction_rule": VALID_JURISDICTION_RULE})
+
+    # `test_valid_args_reach_run_and_persist_a_record` deliberately lives in
+    # test_write_record.py instead of here: unlike the other three tools,
+    # exercising `run()` at all requires a real (throwaway, file-based)
+    # database via the shared `db_session`/`test_settings` fixtures
+    # (conftest.py), which this module's other tests don't need.

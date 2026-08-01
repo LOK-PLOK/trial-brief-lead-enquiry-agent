@@ -89,11 +89,42 @@ def _passing_decision(**overrides) -> VerifierDecision:
 def _final_record() -> LeadRecord:
     return LeadRecord(
         extracted=ExtractedFields(name="Jane"),
-        jurisdiction_rule={"country": "Singapore"},
+        jurisdiction_rule={
+            "country": "Singapore",
+            "requires_disclaimer": False,
+            "restricted": False,
+            "handling_note": "ok",
+        },
         score=10,
         score_breakdown={},
         dedupe_hash="hash-1",
     )
+
+
+def _successful_write_call():
+    now = datetime.now(UTC)
+    return ToolCall(
+        step=4,
+        tool=ToolName.WRITE_RECORD,
+        args={},
+        status=ToolCallStatus.SUCCESS,
+        result={"lead_id": "lead-1", "dedupe_hash": "hash-1"},
+        error=None,
+        latency_ms=1.0,
+        started_at=now,
+        finished_at=now,
+    )
+
+
+@pytest.fixture(autouse=True)
+def stub_post_verify_write(monkeypatch):
+    """Unit tests isolate Planner/Executor/Verifier; stub post-verify write
+    unless a test replaces this behaviour explicitly."""
+
+    def _ok(registry, record, prior_trace):
+        return _successful_write_call(), None
+
+    monkeypatch.setattr(Pipeline, "_execute_write_record", staticmethod(_ok))
 
 
 def _successful_execution(trace: ToolCallTrace | None = None) -> ExecutionResult:
@@ -327,6 +358,9 @@ class TestPipelineNeverRaises:
         result = pipeline.run(ENQUIRY_TEXT)  # must not raise
 
         assert result.final_status == "error"
+        assert result.error_type == "RuntimeError"
+        assert "boom" in (result.error_message or "")
+        assert result.traceback and "Traceback" in result.traceback
 
 
 class TestPlannerFailure:
@@ -341,6 +375,9 @@ class TestPlannerFailure:
         assert result.tool_call_trace is None
         assert result.final_record is None
         assert result.verifier_decision is None
+        assert result.error_type == "RuntimeError"
+        assert result.error_message == "planner boom"
+        assert result.traceback and "planner boom" in result.traceback
 
     def test_executor_and_verifier_are_never_invoked(self, pipeline, no_op_persistence, monkeypatch) -> None:
         executor_called = False
@@ -379,6 +416,8 @@ class TestExecutorFailure:
         assert result.plan is not None
         assert result.plan_schema_valid is True
         assert result.tool_call_trace is None
+        assert result.error_type == "RuntimeError"
+        assert result.error_message == "executor boom"
 
     def test_controlled_tool_failure_skips_verifier_and_preserves_trace(
         self, pipeline, no_op_persistence, monkeypatch
@@ -402,6 +441,8 @@ class TestExecutorFailure:
         assert result.tool_call_trace is not None
         assert result.tool_call_trace.calls == trace.calls
         assert result.final_record is None
+        assert result.error_type == "ExecutorError"
+        assert result.error_message == "tool failed"
 
     def test_missing_final_record_without_an_explicit_error_also_skips_verifier(
         self, pipeline, no_op_persistence, monkeypatch
@@ -456,21 +497,72 @@ class TestVerifierOutcomeRouting:
         assert result.final_status == "completed"
         assert result.verifier_decision is not None
         assert result.verifier_decision.passed is True
+        assert result.tool_call_trace is not None
+        assert result.tool_call_trace.calls[-1].tool == ToolName.WRITE_RECORD
 
-    def test_fail_routes_to_quarantined_without_a_repair_attempt(
+    def test_fail_attempts_repair_then_quarantines_when_repair_also_fails(
         self, pipeline, no_op_persistence, monkeypatch
     ) -> None:
+        from app.agent.repair import RepairResult
+
         failing_decision = _passing_decision(passed=False, reason="fabrication detected")
+        still_failing = _passing_decision(passed=False, reason="still fabricated")
         monkeypatch.setattr(orchestrator_module, "build_plan", _stage_fn(_valid_plan()))
         monkeypatch.setattr(orchestrator_module, "run_plan", _stage_fn(_successful_execution()))
         monkeypatch.setattr(orchestrator_module, "verify", _stage_fn(failing_decision))
 
+        def _fake_repair(*_args, **_kwargs):
+            return RepairResult(
+                succeeded=False,
+                new_plan=_valid_plan(),
+                new_trace=_successful_execution().trace,
+                new_record=_successful_execution().final_record.model_dump(mode="json"),
+                new_verifier_decision=still_failing,
+                strategy_used="reextract",
+            )
+
+        monkeypatch.setattr(orchestrator_module, "attempt_repair", _fake_repair)
+
         result = pipeline.run(ENQUIRY_TEXT)
 
         assert result.final_status == "quarantined"
-        assert result.repair_attempted is False
-        assert result.repair_succeeded is None
+        assert result.repair_attempted is True
+        assert result.repair_succeeded is False
         assert result.verifier_decision.passed is False
+        # Quarantine must not persist a lead via write_record.
+        calls = result.tool_call_trace.calls if result.tool_call_trace else []
+        assert all(c.tool != ToolName.WRITE_RECORD for c in calls)
+
+    def test_fail_attempts_repair_and_completes_when_repair_succeeds(
+        self, pipeline, no_op_persistence, monkeypatch
+    ) -> None:
+        from app.agent.repair import RepairResult
+
+        failing_decision = _passing_decision(passed=False, reason="fabrication detected")
+        repaired_decision = _passing_decision(passed=True, reason="")
+        monkeypatch.setattr(orchestrator_module, "build_plan", _stage_fn(_valid_plan()))
+        monkeypatch.setattr(orchestrator_module, "run_plan", _stage_fn(_successful_execution()))
+        monkeypatch.setattr(orchestrator_module, "verify", _stage_fn(failing_decision))
+
+        def _fake_repair(*_args, **_kwargs):
+            return RepairResult(
+                succeeded=True,
+                new_plan=_valid_plan(),
+                new_trace=_successful_execution().trace,
+                new_record=_successful_execution().final_record.model_dump(mode="json"),
+                new_verifier_decision=repaired_decision,
+                strategy_used="reextract",
+            )
+
+        monkeypatch.setattr(orchestrator_module, "attempt_repair", _fake_repair)
+
+        result = pipeline.run(ENQUIRY_TEXT)
+
+        assert result.final_status == "completed"
+        assert result.repair_attempted is True
+        assert result.repair_succeeded is True
+        assert result.tool_call_trace.calls[-1].tool == ToolName.WRITE_RECORD
+        assert result.verifier_decision.passed is True
 
 
 class TestUsageAggregation:

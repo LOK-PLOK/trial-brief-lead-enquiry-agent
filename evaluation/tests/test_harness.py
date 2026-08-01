@@ -187,6 +187,73 @@ class TestBatchPersistence:
         assert "model_provider" in batch.config_snapshot
 
 
+class TestHarnessExceptionCapture:
+    def test_pipeline_raise_is_persisted_with_traceback(self, db_session) -> None:
+        class _BoomPipeline:
+            def run(self, *args, **kwargs):
+                raise RuntimeError("openrouter 402 Payment Required for chat/completions")
+
+        summary = harness_module.run_harness(
+            enquiries=_enquiries(1),
+            n_repeats=1,
+            expected_n_enquiries=None,
+            pipeline=_BoomPipeline(),  # type: ignore[arg-type]
+            db=db_session,
+        )
+        assert summary.n_runs_executed == 1
+        runs = repository.list_runs_for_batch(db_session, summary.harness_batch_id)
+        assert len(runs) == 1
+        assert runs[0].final_status == "error"
+        assert runs[0].error_type == "RuntimeError"
+        assert "402 Payment Required" in (runs[0].error_message or "")
+        assert runs[0].traceback and "Traceback" in runs[0].traceback
+
+
+class TestProgressAndCancel:
+    def test_on_progress_is_invoked_for_each_run(self, db_session) -> None:
+        events: list[tuple[int, int, str | None, str]] = []
+        harness_module.run_harness(
+            enquiries=_enquiries(2),
+            n_repeats=1,
+            expected_n_enquiries=None,
+            pipeline=_FakePipeline(),
+            db=db_session,
+            on_progress=lambda c, t, e, p: events.append((c, t, e, p)),
+        )
+        phases = [e[3] for e in events]
+        assert "starting" in phases
+        assert "finished" in phases
+        assert any(e[3] == "running" for e in events)
+
+    def test_cooperative_cancel_stops_before_remaining_runs(self, db_session) -> None:
+        fake = _FakePipeline()
+        calls = {"n": 0}
+
+        def should_cancel() -> bool:
+            # Cancel after the first completed run (second should_cancel check
+            # before the second enquiry).
+            return calls["n"] >= 1
+
+        original_run = fake.run
+
+        def counting_run(*args, **kwargs):
+            result = original_run(*args, **kwargs)
+            calls["n"] += 1
+            return result
+
+        fake.run = counting_run  # type: ignore[method-assign]
+        summary = harness_module.run_harness(
+            enquiries=_enquiries(3),
+            n_repeats=1,
+            expected_n_enquiries=None,
+            pipeline=fake,
+            db=db_session,
+            should_cancel=should_cancel,
+        )
+        assert summary.n_runs_executed == 1
+        assert len(fake.calls) == 1
+
+
 class TestReportWriting:
     def test_writes_a_json_report_with_the_full_metrics(self, db_session) -> None:
         summary = harness_module.run_harness(

@@ -91,16 +91,14 @@ JSON example (one manifest entry, from `Tool.manifest_entry()`):
       "tool": "score_lead",
       "args": { "extracted": "...", "jurisdiction_rule": "..." },
       "rationale": "Score using extracted fields and jurisdiction rule."
-    },
-    {
-      "step": 4,
-      "tool": "write_record",
-      "args": { "extracted": "...", "jurisdiction_rule": "...", "score": "..." },
-      "rationale": "Persist the final record."
     }
   ]
 }
 ```
+
+Note: `write_record` remains a registered tool name, but plans should **not** include it.
+The Orchestrator strips any `write_record` steps before Executor/Repair and invokes
+`write_record` once only after Verifier pass (docs/architecture.md §10).
 
 ### Validation rules
 
@@ -207,9 +205,14 @@ which are still fully described by the free-text `error` field.
   `started_at`/`finished_at` timestamps. The trace accumulates in step order and is returned
   as-is even when execution stops early, so it is always complete up to (and including) the
   failing step.
-- `final_record` is only populated when every step in the plan succeeds **and** the plan included
-  all four canonical tools (`parse_enquiry`, `lookup_jurisdiction_rule`, `score_lead`,
-  `write_record`) — a plan that omits one is not an error, it simply yields `final_record: null`.
+- `final_record` is only populated when every step in the (pre-persist) plan
+  succeeds **and** the plan included the three assembly tools
+  (`parse_enquiry`, `lookup_jurisdiction_rule`, `score_lead`) — a plan that
+  omits one is not an error, it simply yields `final_record: null`.
+  `dedupe_hash` is computed from extracted email/phone via
+  `services/dedupe.compute_dedupe_hash` (same algorithm `write_record` uses).
+  `write_record` is **not** required for assembly; the Orchestrator invokes
+  it only after Verifier pass and appends that call to the returned trace.
 - Execution stops at the first failure of any kind; the only way a step goes unexecuted is that an
   earlier one already failed and halted the loop — the Executor never itself skips a step for any
   other reason.
@@ -223,7 +226,7 @@ never crashes and the trace built so far is always returned intact:
 | Failure category | Cause | Behavior |
 |---|---|---|
 | **Tool validation failure** | `Tool.execute()` raises `ToolValidationError` — malformed/hallucinated `step.args`, or a buggy `run()` returning a malformed successful result. | Recorded with `status="error"`, structured `validation_errors`, execution stops. |
-| **Controlled tool failure** | `Tool.execute()` returns normally with `ToolResult(success=False, error=...)` (e.g. `write_record` duplicate) — an expected business outcome, not a bug. | Recorded with `status="error"`, `error` set from `ToolResult.error`, `validation_errors=null`, execution stops. |
+| **Controlled tool failure** | `Tool.execute()` returns normally with `ToolResult(success=False, error=...)` — an expected business outcome, not a bug. Post-verify `write_record` duplicates are handled by the Orchestrator (appended to the trace after Verifier pass), not by the Executor's pre-persist loop. | Recorded with `status="error"`, `error` set from `ToolResult.error`, `validation_errors=null`, execution stops. |
 | **Unexpected internal exception** | Anything else raised out of `Tool.execute()` — a tool bug (e.g. today's placeholder `NotImplementedError`), a provider timeout inside `parse_enquiry`, or an unknown tool name from the registry. | Logged loudly at ERROR with a full traceback (so it is never silently swallowed), then recorded with `status="error"`, `error=f"{type}: {message}"`, execution stops — the exception itself never propagates out of `run_plan()`. |
 | Any deviation from the plan (a step skipped/reordered/substituted) | Cannot originate from the Executor itself (it only iterates `plan.steps`) — if the Verifier detects one, it necessarily traces back to a compromised Plan or an Executor bug, which is exactly why the Verifier checks trace-vs-plan independently. | — |
 
@@ -259,6 +262,10 @@ fresh, stateless LLM call — never a self-check appended to a prior call.
   "confidence": 0.92,
   "fabrication_detected": false,
   "fabricated_fields": [],
+  "extracted_field_verdicts": [
+    {"field": "urgency", "label": "SUPPORTED", "note": "No rush at all"},
+    {"field": "budget_band", "label": "SUPPORTED", "note": "AUD 120,000"}
+  ],
   "plan_deviation_detected": false,
   "deviation_details": null,
   "reason": "All record fields are present or directly inferable in the enquiry text; tool trace matches the plan exactly."
@@ -273,11 +280,19 @@ Failing example:
   "confidence": 0.81,
   "fabrication_detected": true,
   "fabricated_fields": ["phone"],
+  "extracted_field_verdicts": [
+    {"field": "phone", "label": "CONTRADICTED", "note": "not present in enquiry"}
+  ],
   "plan_deviation_detected": false,
   "deviation_details": null,
   "reason": "Phone number in final_record does not appear anywhere in enquiry_text and appears fabricated."
 }
 ```
+
+`extracted_field_verdicts[].label` ∈ `{SUPPORTED, CONTRADICTED, INSUFFICIENT_EVIDENCE}`.
+A deterministic contradiction gate in `agent/verifier.py` ensures only
+`CONTRADICTED` extracted labels may appear in `fabricated_fields`
+(SUPPORTED / INSUFFICIENT_EVIDENCE never quarantine for that field).
 
 ### PASS/FAIL semantics
 
@@ -412,7 +427,7 @@ def manifest_entry(cls) -> dict[str, Any]: ...
 | `parse_enquiry` | LLM-backed | `ParseEnquiryArgs{enquiry_text}` → `ExtractedFields{name, email, phone, country, budget_band, asset_interest, urgency}` |
 | `lookup_jurisdiction_rule` | Deterministic | `LookupJurisdictionRuleArgs{country}` → `JurisdictionRule{country, requires_disclaimer, restricted, handling_note}` |
 | `score_lead` | Deterministic, pure function | `ScoreLeadArgs{extracted, jurisdiction_rule}` → `ScoreLeadResult{score, breakdown}` |
-| `write_record` | Deterministic | `WriteRecordArgs{extracted, jurisdiction_rule, score}` → `WriteRecordResult{lead_id, dedupe_hash}` |
+| `write_record` | Deterministic, **post-verifier only** | `WriteRecordArgs{extracted, jurisdiction_rule, score}` → `WriteRecordResult{lead_id, dedupe_hash}`. Invoked by the Orchestrator after Verifier pass; never by Repair; stripped from plans before Executor. |
 
 ### `ToolRegistry`
 
@@ -456,6 +471,7 @@ Input — `StructuredCompletionRequest` (dataclass):
   "response_schema": "ExtractedFields",
   "model": "gpt-4o-mini",
   "temperature": 0.0,
+  "max_tokens": 512,
   "tools": null,
   "metadata": { "run_id": "b2e1...", "stage": "parse_enquiry" }
 }
@@ -752,8 +768,9 @@ append-only in normal operation (no update/delete path defined).
 
 ### `leads`
 
-**Purpose:** an accepted or quarantined lead record — the output the business actually cares
-about, one row per successfully executed (or repaired) `write_record` call.
+**Purpose:** an accepted lead record — the output the business actually cares
+about. Exactly one row per Verifier-accepted enquiry, created by a single
+post-verify `write_record` call. Quarantined runs do not insert a lead.
 
 ```json
 {

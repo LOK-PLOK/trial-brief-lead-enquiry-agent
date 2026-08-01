@@ -1,19 +1,19 @@
 import { useState } from 'react'
 import { useCreateRun, useRun, useRuns } from '../api/hooks'
 import { RunPanel } from '../components/RunPanel'
-import { HarnessSummary } from '../components/HarnessSummary'
 import { AdversarialReport } from '../components/AdversarialReport'
 import { LeadsList } from '../components/LeadsList'
 import { QueryState } from '../components/common/QueryState'
 import { describeError } from '../api/errors'
 import type { FinalStatus } from '../api/types'
+import { HarnessTesting } from './HarnessTesting'
 
 type Tab = 'run' | 'history' | 'harness' | 'adversarial'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'run', label: 'Run' },
   { id: 'history', label: 'History' },
-  { id: 'harness', label: 'Harness Summary' },
+  { id: 'harness', label: 'Harness Testing' },
   { id: 'adversarial', label: 'Adversarial' },
 ]
 
@@ -62,7 +62,9 @@ export function Home() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-6">
+    <div
+      className={`mx-auto p-6 ${activeTab === 'harness' ? 'max-w-6xl' : 'max-w-4xl'}`}
+    >
       <header className="mb-6">
         <h1 className="text-xl font-semibold text-slate-900">Lead Enquiry Agent</h1>
         <p className="text-sm text-slate-500">
@@ -175,7 +177,7 @@ export function Home() {
         </div>
       )}
 
-      {activeTab === 'harness' && <HarnessSummary />}
+      {activeTab === 'harness' && <HarnessTesting />}
 
       {activeTab === 'adversarial' && (
         <AdversarialReport onLoadEnquiry={handleLoadAdversarialEnquiry} />

@@ -1,8 +1,10 @@
 """The final, verified lead record. See docs/architecture.md section 5 (LEADS table).
 
 Assembled by the Executor from `parse_enquiry` + `lookup_jurisdiction_rule` +
-`score_lead` + `write_record` tool outputs; this is what the Verifier checks
-for fabrication and what gets persisted to the `leads` table on success.
+`score_lead` outputs; `dedupe_hash` is computed from extracted contacts
+(same algorithm as `write_record`) so the Verifier can judge the record
+*before* any lead row is inserted. Persistence via `write_record` happens
+only after Verifier pass (docs/architecture.md section 10).
 """
 
 from __future__ import annotations
@@ -18,7 +20,3 @@ class LeadRecord(BaseModel):
     score: int
     score_breakdown: dict
     dedupe_hash: str
-
-    # TODO(agent/executor): decide final shape once score_lead/write_record
-    # are implemented; this is an illustrative placeholder aggregate per the
-    # architecture doc, not a final contract.

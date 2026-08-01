@@ -17,6 +17,7 @@ from app.agent.orchestrator import Pipeline
 from app.core.config import Settings
 from app.db import repository
 from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCompletionResponse
+from app.schemas.extraction import ExtractedFields
 from app.schemas.plan import Plan, PlanStep, ToolName
 from app.schemas.verifier import VerifierDecision
 from app.tools.base import Tool, ToolResult
@@ -169,6 +170,15 @@ class _FullPipelineFakeAdapter(ModelAdapter):
         elif request.response_schema is VerifierDecision:
             parsed = self._decision
             model = "fake-verifier-model"
+        elif request.response_schema is ExtractedFields:
+            # Served during the Repair Loop's `reextract` strategy.
+            parsed = ExtractedFields(
+                name="Jane Doe",
+                email="jane@example.com",
+                phone=None,
+                country="Singapore",
+            )
+            model = "fake-extractor-model"
         else:
             raise AssertionError(f"unexpected response_schema: {request.response_schema}")
         return StructuredCompletionResponse(
@@ -205,7 +215,10 @@ class TestFullPipelineHappyPath:
             assert result.tool_call_trace is not None
             assert len(result.tool_call_trace.calls) == 4
             assert result.final_record is not None
-            assert result.final_record.dedupe_hash == "hash-1"
+            from app.services.dedupe import compute_dedupe_hash
+
+            assert result.final_record.dedupe_hash == compute_dedupe_hash("jane@example.com", None)
+            assert result.tool_call_trace.calls[-1].tool == ToolName.WRITE_RECORD
             assert result.verifier_decision is not None
             assert result.verifier_decision.passed is True
             assert len(adapter.planner_requests) == 1
@@ -251,24 +264,33 @@ class TestFullPipelineHappyPath:
 
 
 class TestFullPipelineVerifierFailure:
-    def test_verifier_fail_routes_to_quarantined_and_is_persisted_as_such(self, db_session: Session) -> None:
+    def test_verifier_fail_attempts_repair_then_quarantines_when_still_failing(
+        self, db_session: Session
+    ) -> None:
         saved = _isolate_tool_slate()
         try:
             _register_canonical_mock_tools()
+            # Fake adapter always returns the same failing VerifierDecision, so
+            # the post-repair re-verify also fails — exercising the
+            # "one repair then quarantine" path (docs/architecture.md §10).
             adapter = _FullPipelineFakeAdapter(plan=_canonical_plan(), decision=_failing_decision())
             pipeline = Pipeline(adapter=adapter, settings=Settings())
 
             result = pipeline.run(ENQUIRY_TEXT, db=db_session)
 
             assert result.final_status == "quarantined"
-            assert result.repair_attempted is False
-            assert result.repair_succeeded is None
+            assert result.repair_attempted is True
+            assert result.repair_succeeded is False
             assert result.verifier_decision.fabrication_detected is True
+            # Initial verify + post-repair verify (fresh, independent call).
+            assert len(adapter.verifier_requests) == 2
 
             row = repository.get_run(db_session, result.id)
             assert row.final_status == "quarantined"
             assert row.fabrication_detected is True
             assert row.fabricated_fields == ["phone"]
+            assert row.repair_attempted is True
+            assert row.repair_succeeded is False
         finally:
             _restore_tool_slate(saved)
 

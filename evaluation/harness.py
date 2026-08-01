@@ -52,6 +52,9 @@ recorded and reported like any other run, per this project's honesty policy.
 from __future__ import annotations
 
 import json
+import traceback
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,11 +66,19 @@ from app.core.logging import configure_logging, get_logger
 from app.db import repository
 from app.db.session import init_db, session_scope
 from app.llm.factory import get_adapter
+from app.schemas.run import RunResult
 from sqlalchemy.orm import Session
 
 from evaluation.metrics import compute_harness_metrics
 
 logger = get_logger(__name__)
+
+# Optional progress hook for the API job runner. Signature:
+# (completed, total, current_enquiry_id | None, phase)
+# phase ∈ {"starting", "running", "skipped", "cancelled", "finished"}
+ProgressCallback = Callable[[int, int, str | None, str], None]
+CancelCallback = Callable[[], bool]
+BatchCreatedCallback = Callable[[str], None]
 
 FIXTURES_PATH = Path(__file__).resolve().parent / "fixtures" / "enquiries.json"
 REPORTS_DIR = Path(__file__).resolve().parent / "reports"
@@ -117,6 +128,56 @@ def _config_snapshot(settings: Settings) -> dict[str, Any]:
     }
 
 
+def _execute_harness_run(
+    pipeline: Pipeline,
+    db: Session,
+    *,
+    enquiry_text: str,
+    enquiry_id: str,
+    repeat_index: int,
+    harness_batch_id: str,
+) -> RunResult:
+    """Call `Pipeline.run()` and never hide failures.
+
+    `Pipeline.run()` normally converts stage exceptions into structured
+    `RunResult` rows (with `error_type` / `error_message` / `traceback`).
+    If it nevertheless raises, the harness persists those fields itself so
+    the dashboard always shows the real failure reason.
+    """
+    try:
+        return pipeline.run(
+            enquiry_text,
+            enquiry_id=enquiry_id,
+            repeat_index=repeat_index,
+            db=db,
+            harness_batch_id=harness_batch_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "Pipeline.run raised during harness; persisting error row",
+            exc_info=True,
+            extra={
+                "event": "harness_pipeline_raised",
+                "harness_batch_id": harness_batch_id,
+                "enquiry_id": enquiry_id,
+                "repeat_index": repeat_index,
+            },
+        )
+        result = RunResult(
+            id=str(uuid.uuid4()),
+            enquiry_text=enquiry_text,
+            enquiry_id=enquiry_id,
+            repeat_index=repeat_index,
+            final_status="error",
+            error_type=type(exc).__name__,
+            error_message=str(exc).strip() or repr(exc),
+            traceback=traceback.format_exc(),
+            created_at=datetime.now(UTC),
+        )
+        repository.create_run(db, result, harness_batch_id=harness_batch_id)
+        return result
+
+
 def run_harness(
     *,
     n_repeats: int = N_REPEATS,
@@ -125,6 +186,9 @@ def run_harness(
     pipeline: Pipeline | None = None,
     db: Session | None = None,
     harness_batch_id: str | None = None,
+    on_progress: ProgressCallback | None = None,
+    should_cancel: CancelCallback | None = None,
+    on_batch_created: BatchCreatedCallback | None = None,
 ) -> HarnessRunSummary:
     """Run exactly `len(enquiries) * n_repeats` independent runs (45 by
     default) through `Pipeline.run()`, compute the full metrics set, persist
@@ -147,6 +211,10 @@ def run_harness(
     silently reporting numbers for the wrong sample size. Pass `None` to
     disable this check (used by tests that exercise the harness's own
     logic against a small, synthetic enquiry list).
+
+    `on_progress` / `should_cancel` are optional hooks for the web job API.
+    Cancellation is cooperative: checked between runs only — never aborts
+    an in-flight `Pipeline.run()`. Does not change Planner/Executor/Verifier.
     """
     settings = get_settings()
     enquiries = enquiries if enquiries is not None else load_enquiries()
@@ -174,6 +242,9 @@ def run_harness(
             pipeline=pipeline,
             settings=settings,
             harness_batch_id=harness_batch_id,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+            on_batch_created=on_batch_created,
         )
     with session_scope() as scoped_db:
         return _run_harness_with_session(
@@ -183,6 +254,9 @@ def run_harness(
             pipeline=pipeline,
             settings=settings,
             harness_batch_id=harness_batch_id,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+            on_batch_created=on_batch_created,
         )
 
 
@@ -194,6 +268,9 @@ def _run_harness_with_session(
     pipeline: Pipeline,
     settings: Settings,
     harness_batch_id: str | None,
+    on_progress: ProgressCallback | None = None,
+    should_cancel: CancelCallback | None = None,
+    on_batch_created: BatchCreatedCallback | None = None,
 ) -> HarnessRunSummary:
     n_runs_expected = len(enquiries) * n_repeats
 
@@ -206,15 +283,30 @@ def _run_harness_with_session(
             db, n_runs=n_runs_expected, config_snapshot=_config_snapshot(settings)
         )
 
+    if on_batch_created is not None:
+        on_batch_created(batch.id)
+
+    if on_progress is not None:
+        on_progress(0, n_runs_expected, None, "starting")
+
     n_executed = 0
     n_skipped = 0
+    n_done = 0
+    cancelled = False
     for enquiry in enquiries:
         enquiry_id = enquiry["id"]
         enquiry_text = enquiry["text"]
         for repeat_index in range(1, n_repeats + 1):
+            if should_cancel is not None and should_cancel():
+                cancelled = True
+                if on_progress is not None:
+                    on_progress(n_done, n_runs_expected, enquiry_id, "cancelled")
+                break
+
             existing = repository.find_run_by_batch_position(db, batch.id, enquiry_id, repeat_index)
             if existing is not None:
                 n_skipped += 1
+                n_done += 1
                 logger.info(
                     "skipping already-completed run",
                     extra={
@@ -225,6 +317,8 @@ def _run_harness_with_session(
                         "existing_run_id": existing.id,
                     },
                 )
+                if on_progress is not None:
+                    on_progress(n_done, n_runs_expected, enquiry_id, "skipped")
                 continue
 
             logger.info(
@@ -236,14 +330,22 @@ def _run_harness_with_session(
                     "repeat_index": repeat_index,
                 },
             )
-            pipeline.run(
-                enquiry_text,
+            if on_progress is not None:
+                on_progress(n_done, n_runs_expected, enquiry_id, "running")
+            _execute_harness_run(
+                pipeline,
+                db,
+                enquiry_text=enquiry_text,
                 enquiry_id=enquiry_id,
                 repeat_index=repeat_index,
-                db=db,
                 harness_batch_id=batch.id,
             )
             n_executed += 1
+            n_done += 1
+            if on_progress is not None:
+                on_progress(n_done, n_runs_expected, enquiry_id, "running")
+        if cancelled:
+            break
 
     metrics = compute_harness_metrics(db, batch.id)
     repository.finish_harness_batch(db, batch.id, metrics=metrics)
@@ -267,6 +369,9 @@ def _run_harness_with_session(
         n_runs_skipped=n_skipped,
         metrics=metrics,
     )
+
+    if on_progress is not None:
+        on_progress(n_done, n_runs_expected, None, "cancelled" if cancelled else "finished")
 
     return HarnessRunSummary(
         harness_batch_id=batch.id,

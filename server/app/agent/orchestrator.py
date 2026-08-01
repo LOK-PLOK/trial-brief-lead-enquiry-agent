@@ -1,7 +1,6 @@
-"""The Pipeline: ties Planner -> Executor -> Verifier -> persistence
-together. See docs/architecture.md section 1 and the sequence diagrams in
-section 14. Repair (section 10) and the evaluation harness (section 11) are
-explicitly out of scope for this module -- see `run()`'s docstring.
+"""The Pipeline: ties Planner -> Executor -> Verifier -> (optional Repair) ->
+post-verify `write_record` persistence together. See docs/architecture.md
+section 1, section 10, and the sequence diagrams in section 14.
 
 Critical property: both the live API (server/app/api/routes_runs.py) and the
 standalone evaluation harness (evaluation/harness.py) must call this same
@@ -11,14 +10,19 @@ reproducible against real system behaviour (docs/architecture.md section 11).
 
 from __future__ import annotations
 
+import traceback
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.agent.executor import run_plan
+from app.agent.plan_utils import strip_write_record
 from app.agent.planner import build_plan
+from app.agent.repair import attempt_repair
 from app.agent.verifier import verify
 from app.core.config import ModelProvider, Settings
 from app.core.logging import get_logger, run_id_ctx, stage_ctx
@@ -26,11 +30,38 @@ from app.db import repository
 from app.db.session import session_scope
 from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCompletionResponse
 from app.llm.pricing import estimate_cost_usd
+from app.schemas.lead_record import LeadRecord
+from app.schemas.plan import ToolName
 from app.schemas.run import LlmCallUsage, RunResult
+from app.schemas.tool_trace import ToolCall, ToolCallStatus, ToolCallTrace
+from app.schemas.verifier import VerifierDecision
 from app.services.cost import aggregate_usage
 from app.tools.registry import ToolRegistry
 
 logger = get_logger(__name__)
+
+
+def _exception_fields(exc: BaseException) -> dict[str, str]:
+    """Preserve the real exception for the run row / harness dashboard."""
+    message = str(exc).strip() or repr(exc)
+    return {
+        "error_type": type(exc).__name__,
+        "error_message": message,
+        "traceback": traceback.format_exc(),
+    }
+
+
+def _error_fields(
+    *,
+    error_type: str,
+    error_message: str,
+    tb: str | None = None,
+) -> dict[str, str | None]:
+    return {
+        "error_type": error_type,
+        "error_message": error_message,
+        "traceback": tb,
+    }
 
 
 class _UsageTrackingAdapter(ModelAdapter):
@@ -93,47 +124,21 @@ class Pipeline:
         db: Session | None = None,
         harness_batch_id: str | None = None,
     ) -> RunResult:
-        """Execute one full pipeline pass (Planner -> Executor -> Verifier),
-        persist it, and return a complete `RunResult`. Never raises: every
-        stage failure -- Planner, Executor, or Verifier -- is caught and
-        converted into a structured `RunResult(final_status="error", ...)`
-        rather than propagating (this task's explicit requirement).
+        """Execute one full pipeline pass (Planner -> Executor -> Verifier ->
+        optional Repair -> post-verify `write_record`), persist the run row,
+        and return a complete `RunResult`. Never raises: every stage failure
+        is caught and converted into a structured
+        `RunResult(final_status=...)` rather than propagating.
 
-        `db`: optional `Session` for persistence. When omitted, a session is
-        opened and closed internally via `db/session.session_scope()`, so
-        neither the (not-yet-implemented) API route nor the evaluation
-        harness need to manage a session themselves -- both can simply call
-        `Pipeline(adapter, settings).run(enquiry_text)`. Pass one explicitly
-        (e.g. from a FastAPI request-scoped dependency, or a test fixture)
-        to reuse an existing session instead.
+        `write_record` runs only after the Verifier has passed (including
+        after a successful repair re-verify). Quarantined runs never insert
+        a lead. Exactly one lead row is created per accepted enquiry.
 
-        `harness_batch_id`: optional, forwarded as-is to
-        `repository.create_run()`. **Additive parameter** (evaluation/harness.py's
-        own task, not the Orchestrator's original one): `RunResult` itself
-        has no notion of which harness batch it belongs to (a single run
-        doesn't know), and `repository.create_run()` already anticipated
-        exactly this via its own optional `harness_batch_id` keyword
-        (docs/contracts.md section 6: "accepted as an optional keyword so
-        the harness can link a run to its batch at persistence time without
-        requiring a separate update call") -- this parameter is simply the
-        one missing piece of plumbing between that repository contract and
-        `Pipeline.run()`'s caller. `None` (the default) behaves exactly as
-        before: a live API run, or any call that doesn't pass it, is not
-        linked to any batch.
+        `db`: optional `Session` for run-row persistence. When omitted, a
+        session is opened via `session_scope()`. Lead inserts use
+        `write_record`'s own short-lived session (same as before).
 
-        Explicitly out of scope for this method still (per the Orchestrator's
-        own task): the Repair Loop (docs/architecture.md section 10) -- a
-        Verifier `passed=False` currently routes straight to
-        `final_status="quarantined"` -- never silently dropped, but not yet
-        re-attempted. `repair_attempted` stays `False`.
-
-        One run ID is generated up front and bound to `run_id_ctx` for the
-        entire call, so every log line emitted by every stage below --
-        Planner, Executor, Verifier, and this method's own -- is tagged
-        with the same `run_id` (docs/architecture.md section 12), and the
-        same ID is used as `RunResult.id` / the `runs.id` primary key, so
-        the live log trail and the persisted row can always be correlated
-        after the fact.
+        `harness_batch_id`: optional, forwarded to `repository.create_run()`.
         """
         run_id = str(uuid.uuid4())
         run_id_token = run_id_ctx.set(run_id)
@@ -177,29 +182,36 @@ class Pipeline:
 
         try:
             tool_manifest = ToolRegistry.tool_manifest()
-            plan = build_plan(enquiry_text, tool_manifest, tracking_adapter)
-        except Exception:
+            plan = strip_write_record(build_plan(enquiry_text, tool_manifest, tracking_adapter))
+        except Exception as exc:
             logger.error(
                 "planner stage failed; returning a structured error result",
                 exc_info=True,
                 extra={"event": "orchestrator_stage_failed", "stage": "planner"},
             )
-            return self._build_result(common, tracking_adapter, final_status="error")
+            return self._build_result(
+                common,
+                tracking_adapter,
+                final_status="error",
+                **_exception_fields(exc),
+            )
 
         try:
             registry = ToolRegistry(adapter=tracking_adapter)
             execution = run_plan(plan, enquiry_text, registry)
-        except Exception:
-            # run_plan() itself never raises by contract (docs/contracts.md
-            # section 2) -- this is a last-resort net for a genuine
-            # Executor bug, so it degrades the same way instead of crashing.
+        except Exception as exc:
             logger.error(
                 "executor stage raised unexpectedly; returning a structured error result",
                 exc_info=True,
                 extra={"event": "orchestrator_stage_failed", "stage": "executor"},
             )
             return self._build_result(
-                common, tracking_adapter, plan=plan, plan_schema_valid=True, final_status="error"
+                common,
+                tracking_adapter,
+                plan=plan,
+                plan_schema_valid=True,
+                final_status="error",
+                **_exception_fields(exc),
             )
 
         if execution.error is not None or execution.final_record is None:
@@ -210,6 +222,7 @@ class Pipeline:
                     "executor_error": execution.error,
                 },
             )
+            message = execution.error or "Executor produced no final_record"
             return self._build_result(
                 common,
                 tracking_adapter,
@@ -217,6 +230,7 @@ class Pipeline:
                 plan_schema_valid=True,
                 tool_call_trace=execution.trace,
                 final_status="error",
+                **_error_fields(error_type="ExecutorError", error_message=message),
             )
 
         try:
@@ -227,7 +241,7 @@ class Pipeline:
                 execution.final_record.model_dump(mode="json"),
                 tracking_adapter,
             )
-        except Exception:
+        except Exception as exc:
             logger.error(
                 "verifier stage failed; returning a structured error result",
                 exc_info=True,
@@ -241,26 +255,226 @@ class Pipeline:
                 tool_call_trace=execution.trace,
                 final_record=execution.final_record,
                 final_status="error",
+                **_exception_fields(exc),
             )
 
-        # Repair Loop intentionally not implemented yet (see run()'s
-        # docstring): a failed verification routes straight to quarantine
-        # rather than being silently dropped, per the brief's repair-loop
-        # spec, just without an intervening repair attempt for now.
-        final_status = "completed" if decision.passed else "quarantined"
+        if decision.passed:
+            return self._finalize_accepted(
+                common,
+                tracking_adapter,
+                registry=registry,
+                plan=plan,
+                trace=execution.trace,
+                record=execution.final_record,
+                decision=decision,
+                repair_attempted=False,
+                repair_succeeded=None,
+            )
+
+        # Exactly one repair attempt (docs/architecture.md section 10), then
+        # completed or quarantined — never silently dropped. Repair never
+        # calls write_record; persistence happens only if re-verify passes.
+        try:
+            repair = attempt_repair(
+                enquiry_text,
+                plan,
+                execution.trace,
+                execution.final_record.model_dump(mode="json"),
+                decision,
+                tracking_adapter,
+            )
+        except Exception as exc:
+            logger.error(
+                "repair stage failed; quarantining with the original verifier decision",
+                exc_info=True,
+                extra={"event": "orchestrator_stage_failed", "stage": "repair"},
+            )
+            return self._build_result(
+                common,
+                tracking_adapter,
+                plan=plan,
+                plan_schema_valid=True,
+                tool_call_trace=execution.trace,
+                final_record=execution.final_record,
+                verifier_decision=decision,
+                repair_attempted=True,
+                repair_succeeded=False,
+                final_status="quarantined",
+                **_exception_fields(exc),
+            )
+
+        repaired_record: LeadRecord | None = execution.final_record
+        if repair.new_record is not None:
+            try:
+                repaired_record = LeadRecord.model_validate(repair.new_record)
+            except Exception:
+                logger.warning(
+                    "repair produced a final_record that failed LeadRecord validation; "
+                    "keeping the pre-repair record",
+                    exc_info=True,
+                    extra={"event": "orchestrator_repair_record_invalid"},
+                )
+
+        repaired_plan = repair.new_plan or plan
+        repaired_trace = repair.new_trace or execution.trace
+
+        if not repair.succeeded or repaired_record is None:
+            return self._build_result(
+                common,
+                tracking_adapter,
+                plan=repaired_plan,
+                plan_schema_valid=True,
+                tool_call_trace=repaired_trace,
+                final_record=repaired_record,
+                verifier_decision=repair.new_verifier_decision,
+                repair_attempted=True,
+                repair_succeeded=False,
+                final_status="quarantined",
+            )
+
+        return self._finalize_accepted(
+            common,
+            tracking_adapter,
+            registry=registry,
+            plan=repaired_plan,
+            trace=repaired_trace,
+            record=repaired_record,
+            decision=repair.new_verifier_decision,
+            repair_attempted=True,
+            repair_succeeded=True,
+        )
+
+    def _finalize_accepted(
+        self,
+        common: dict,
+        tracking_adapter: _UsageTrackingAdapter,
+        *,
+        registry: ToolRegistry,
+        plan,
+        trace: ToolCallTrace,
+        record: LeadRecord,
+        decision: VerifierDecision,
+        repair_attempted: bool,
+        repair_succeeded: bool | None,
+    ) -> RunResult:
+        """Verifier (or repair re-verify) passed — persist exactly one lead."""
+        write_call, write_error = self._execute_write_record(registry, record, trace)
+        merged_trace = ToolCallTrace(calls=[*trace.calls, write_call])
+
+        if write_error is not None:
+            logger.warning(
+                "post-verify write_record failed",
+                extra={
+                    "event": "orchestrator_write_failed",
+                    "error": write_error,
+                    "dedupe_hash": record.dedupe_hash,
+                },
+            )
+            return self._build_result(
+                common,
+                tracking_adapter,
+                plan=plan,
+                plan_schema_valid=True,
+                tool_call_trace=merged_trace,
+                final_record=record,
+                verifier_decision=decision,
+                repair_attempted=repair_attempted,
+                repair_succeeded=repair_succeeded,
+                final_status="error",
+                **_error_fields(
+                    error_type="WriteRecordError",
+                    error_message=write_error,
+                ),
+            )
+
         return self._build_result(
             common,
             tracking_adapter,
             plan=plan,
             plan_schema_valid=True,
-            tool_call_trace=execution.trace,
-            final_record=execution.final_record,
+            tool_call_trace=merged_trace,
+            final_record=record,
             verifier_decision=decision,
-            final_status=final_status,
+            repair_attempted=repair_attempted,
+            repair_succeeded=repair_succeeded,
+            final_status="completed",
         )
 
     @staticmethod
-    def _build_result(common: dict, tracking_adapter: _UsageTrackingAdapter, **fields) -> RunResult:
+    def _execute_write_record(
+        registry: ToolRegistry,
+        record: LeadRecord,
+        prior_trace: ToolCallTrace,
+    ) -> tuple[ToolCall, str | None]:
+        """Run `write_record` once after Verifier pass. Returns the ToolCall
+        to append to the trace and an error string if persistence failed."""
+        step_number = len(prior_trace.calls) + 1
+        args = {
+            "extracted": record.extracted.model_dump(mode="json"),
+            "jurisdiction_rule": record.jurisdiction_rule,
+            "score": {
+                "score": record.score,
+                "breakdown": record.score_breakdown,
+            },
+        }
+        started_at = datetime.now(UTC)
+        perf_start = time.perf_counter()
+        tool = registry.get_tool(ToolName.WRITE_RECORD.value)
+        try:
+            result = tool.execute(args)
+        except Exception as exc:
+            finished_at = datetime.now(UTC)
+            call = ToolCall(
+                step=step_number,
+                tool=ToolName.WRITE_RECORD,
+                args=args,
+                status=ToolCallStatus.ERROR,
+                result=None,
+                error=f"{type(exc).__name__}: {exc}",
+                validation_errors=None,
+                latency_ms=(time.perf_counter() - perf_start) * 1000,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            return call, call.error
+
+        finished_at = datetime.now(UTC)
+        latency_ms = (time.perf_counter() - perf_start) * 1000
+        if result.success:
+            call = ToolCall(
+                step=step_number,
+                tool=ToolName.WRITE_RECORD,
+                args=args,
+                status=ToolCallStatus.SUCCESS,
+                result=result.data,
+                error=None,
+                validation_errors=None,
+                latency_ms=latency_ms,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            return call, None
+
+        call = ToolCall(
+            step=step_number,
+            tool=ToolName.WRITE_RECORD,
+            args=args,
+            status=ToolCallStatus.ERROR,
+            result=None,
+            error=result.error,
+            validation_errors=None,
+            latency_ms=latency_ms,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        return call, result.error or "write_record failed"
+
+    @staticmethod
+    def _build_result(
+        common: dict,
+        tracking_adapter: _UsageTrackingAdapter,
+        **fields: Any,
+    ) -> RunResult:
         usage = aggregate_usage(tracking_adapter.calls)
         return RunResult(
             **common,
@@ -272,12 +486,7 @@ class Pipeline:
         )
 
     def _persist(self, result: RunResult, db: Session | None, *, harness_batch_id: str | None) -> None:
-        """Persist via db/repository.py -- never raises: a persistence
-        failure is logged loudly (it must not be silent) but must not
-        prevent `run()` from returning the already-complete `RunResult` to
-        its caller (this task's requirement 7 takes priority over
-        requirement 6 when the two conflict, i.e. a DB outage should not
-        turn a real pipeline result into a crash)."""
+        """Persist the run row via db/repository.py -- never raises."""
         try:
             if db is not None:
                 repository.create_run(db, result, harness_batch_id=harness_batch_id)

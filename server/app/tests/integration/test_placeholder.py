@@ -1,13 +1,14 @@
-"""Placeholder for integration tests.
+"""Historical scaffold placeholder.
 
-TODO(tests/integration): replace with real tests once agent/orchestrator.py
-is implemented, e.g.:
-- test_pipeline_happy_path.py: Pipeline.run() end-to-end with a mocked
-  ModelAdapter, asserting final_status == "completed".
-- test_repair_loop.py: force a verifier failure, assert exactly one repair
-  attempt and a correct final_status (completed or quarantined).
-- test_api_routes.py: FastAPI TestClient hitting /api/runs, /api/leads,
-  /api/harness/summary.
+The three TODOs originally listed here are now covered by dedicated modules:
+- Pipeline happy path / quarantine / error → `test_orchestrator_integration.py`
+- API routes → `test_api_routes.py`
+- Repair loop → `tests/unit/test_repair.py` plus orchestrator unit/integration
+  assertions that a verifier failure attempts exactly one repair before
+  quarantine or completion.
+
+This file remains so existing test discovery paths stay stable; it does not
+assert product behaviour.
 """
 
 

@@ -18,16 +18,10 @@ sense:
   any way; its assertions are made directly against the two `RunResult`s.
 
 Complements (rather than duplicates) the existing DB-layer coverage in
-tests/integration/test_duplicate_detection.py, which tests
-`services/dedupe.py` + `db/repository.py`'s hash/unique-constraint mechanics
-directly. This module instead tests that the *pipeline* (Executor's
-handling of a controlled tool failure, Orchestrator's resulting
-`final_status`) reacts correctly when a tool reports a duplicate -- using a
-mock `write_record` that performs the same real dedupe check a future real
-implementation will (`services/dedupe.compute_dedupe_hash` +
-`db/repository.find_lead_by_dedupe_hash`/`create_lead`), since the real
-`tools/write_record.py` still `raise NotImplementedError` at this stage
-(docs/development-rules.md: business logic intentionally not yet written).
+tests/integration/test_duplicate_detection.py. This module tests that the
+pipeline verifies first, then runs `write_record` only after Verifier pass,
+and that a second identical submission fails at that post-verify write
+without inserting a second lead.
 """
 
 from __future__ import annotations
@@ -70,21 +64,30 @@ def _mock_tool(tool_name: str, run_impl) -> type[Tool]:
     )
 
 
-def _register_dedupe_aware_mock_tools(db_session) -> None:
+def _register_dedupe_aware_mock_tools(db_session, contacts: list[dict] | None = None) -> None:
     """Registers the four canonical tools, with `write_record` performing a
     *real* dedupe check against `db_session` -- the exact
     check-then-insert pattern docs/contracts.md section 6 mandates for a
     real implementation (`find_lead_by_dedupe_hash` first, `create_lead`
-    only if absent)."""
-    _mock_tool(
-        "parse_enquiry",
-        lambda self, args: ToolResult(
-            success=True,
-            data={"name": "Jane Doe", "email": "jane@example.com", "phone": "+65 5551234"},
-            error=None,
-            latency_ms=1.0,
-        ),
-    )
+    only if absent).
+
+    `parse_enquiry`'s mock returns each of `contacts` in call order
+    (mirroring `_FakeAdapter`'s own `contacts`-by-call-order pattern below)
+    -- needed because agent/executor.py resolves `score_lead`'s/
+    `write_record`'s chained `extracted`/`jurisdiction_rule`/`score` args
+    from each upstream tool's *actual* result (see
+    agent/executor.py::_resolve_args), not from whatever a downstream step's
+    own Plan args said directly. Defaults to always returning `_JANE`, which
+    is all the first two tests below need (a single, repeated contact)."""
+    contact_sequence = list(contacts) if contacts is not None else [_JANE]
+    call_index = {"value": 0}
+
+    def _parse_enquiry_run(self, args: _PermissiveArgs) -> ToolResult:
+        i = min(call_index["value"], len(contact_sequence) - 1)
+        call_index["value"] += 1
+        return ToolResult(success=True, data=dict(contact_sequence[i]), error=None, latency_ms=1.0)
+
+    _mock_tool("parse_enquiry", _parse_enquiry_run)
     _mock_tool(
         "lookup_jurisdiction_rule",
         lambda self, args: ToolResult(
@@ -136,7 +139,7 @@ def _restore_tool_slate(saved: dict) -> None:
     Tool._registry.update(saved)
 
 
-_JANE = {"email": "jane@example.com", "phone": "+65 5551234"}
+_JANE = {"name": "Jane Doe", "email": "jane@example.com", "phone": "+65 5551234"}
 
 
 def _canonical_plan(contact: dict = _JANE) -> Plan:
@@ -242,10 +245,12 @@ class TestPipelineRejectsADuplicateSubmission:
             assert first.final_status == "completed"
             assert first.id != second.id  # two distinct runs, never conflated
 
+            # Verifier is the gate: a duplicate is rejected only at post-verify
+            # write_record, after a successful re-verify of the same record.
             assert second.final_status == "error"
-            assert second.final_record is None
-            # The controlled failure happened at write_record (step 4): the
-            # trace still records all 4 attempts, the last one failed.
+            assert second.final_record is not None
+            assert second.verifier_decision is not None
+            assert second.verifier_decision.passed is True
             assert second.tool_call_trace is not None
             assert len(second.tool_call_trace.calls) == 4
             last_call = second.tool_call_trace.calls[-1]
@@ -253,9 +258,6 @@ class TestPipelineRejectsADuplicateSubmission:
             assert last_call.status == "error"
             assert last_call.error == "duplicate"
             assert last_call.validation_errors is None  # a business failure, not a validation one
-
-            # The Verifier is never reached without a final_record to judge.
-            assert second.verifier_decision is None
 
             # Exactly one lead exists in total -- the duplicate was never inserted.
             assert len(repository.list_leads(db_session)) == 1
@@ -270,8 +272,8 @@ class TestPipelineRejectsADuplicateSubmission:
         normalized email and phone with an existing lead."""
         saved = _isolate_tool_slate()
         try:
-            _register_dedupe_aware_mock_tools(db_session)
-            john = {"email": "john@example.com", "phone": "+65 5559999"}
+            john = {"name": "John Smith", "email": "john@example.com", "phone": "+65 5559999"}
+            _register_dedupe_aware_mock_tools(db_session, contacts=[_JANE, john])
             pipeline = Pipeline(adapter=_FakeAdapter(contacts=[_JANE, john]), settings=Settings())
 
             first = pipeline.run(ENQUIRY_TEXT, db=db_session)
@@ -286,9 +288,23 @@ class TestPipelineRejectsADuplicateSubmission:
 
 
 def test_this_test_module_never_touches_harness_infrastructure(db_session) -> None:
-    """Structural guard for requirement 6: this module must not import or
-    call anything from evaluation/ or create harness bookkeeping rows."""
-    import sys
+    """Structural guard for requirement 6: this module must not drive the
+    harness or create harness bookkeeping rows.
 
-    assert not any(name.startswith("evaluation") for name in sys.modules)
+    Uses importlib (not process-wide `sys.modules`), because unrelated API
+    tests may legitimately load the harness job package in the same pytest
+    session.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "evaluation" not in imported
+    assert "run_harness" not in imported
     assert repository.get_latest_harness_batch(db_session) is None

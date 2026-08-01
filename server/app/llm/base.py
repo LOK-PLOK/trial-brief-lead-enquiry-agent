@@ -24,6 +24,10 @@ class StructuredCompletionRequest:
     response_schema: type[BaseModel]
     model: str
     temperature: float = 0.0
+    # Cap completion size so providers (esp. OpenRouter) don't reserve a
+    # huge default (often 16k) against remaining credits. Stage call sites
+    # set tighter values; 1024 is the safe global default.
+    max_tokens: int = 1024
     tools: list[dict[str, Any]] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -45,11 +49,33 @@ class StructuredCompletionResponse:
     model: str
 
 
+class LLMProviderError(Exception):
+    """Raised by a concrete `ModelAdapter` for any provider-level failure
+    (timeout, rate limit, auth failure, malformed/unexpected response shape)
+    — never let a bare provider SDK/HTTP exception escape an adapter, per
+    docs/contracts.md section 5's failure-mode table: "Must propagate as an
+    `LLMProviderError` (or equivalent) rather than a bare provider SDK
+    exception, so `main.py`'s central exception handler can map it to a
+    structured JSON error body with the correlating `run_id`."
+    """
+
+
+class LLMSchemaValidationError(Exception):
+    """Raised by a concrete `ModelAdapter` when `request.response_schema`
+    still fails to validate after the adapter's own one internal retry
+    (docs/contracts.md section 5: "Schema validation fails on both the
+    original attempt and the one internal retry" -> "Adapter surfaces this
+    to the caller"). Callers (Planner/Verifier/`parse_enquiry`) are
+    responsible for counting the *first* attempt's outcome toward the
+    harness's schema-breach-rate metrics regardless of this exception.
+    """
+
+
 class ModelAdapter(ABC):
     """Common interface every concrete provider adapter must implement.
 
-    No concrete adapter exists yet — see `llm/factory.py` for how one gets
-    selected/constructed once implemented.
+    See `llm/openrouter_adapter.py` for the one concrete implementation, and
+    `llm/factory.py` for how it gets selected/constructed.
     """
 
     provider_name: str
@@ -65,12 +91,17 @@ class ModelAdapter(ABC):
           `request.response_schema`, retrying internally at most once on
           schema validation failure (see docs/architecture.md section 6);
           callers are still responsible for counting/reporting the first
-          attempt's outcome for the harness's schema-breach metrics.
+          attempt's outcome for the harness's schema-breach metrics. Raise
+          `LLMSchemaValidationError` if both attempts fail to validate.
+        - Raise `LLMProviderError` for any provider-level failure (timeout,
+          rate limit, auth, malformed response) rather than a bare SDK/HTTP
+          exception.
 
-        TODO(llm): implement per-provider. OpenAI/Anthropic should use native
-        structured-output / tool-calling modes where available; Ollama (or
-        any local model without guaranteed JSON-schema support) should fall
-        back to instruct-then-validate-then-retry, and is expected to have a
-        higher schema-breach rate — report that honestly, don't paper over it.
+        OpenAI/Anthropic should use native structured-output / tool-calling
+        modes where available; a model without *guaranteed* JSON-schema
+        support (e.g. Ollama, or an arbitrary model proxied by OpenRouter)
+        should fall back to instruct-then-validate-then-retry, and is
+        expected to have a higher schema-breach rate — report that honestly,
+        don't paper over it.
         """
         raise NotImplementedError

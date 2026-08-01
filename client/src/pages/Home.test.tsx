@@ -39,7 +39,7 @@ describe('Home', () => {
 
     expect(screen.getAllByRole('button', { name: 'Run' }).length).toBe(2)
     expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Harness Summary' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Harness Testing' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Adversarial' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Paste an enquiry...')).toBeInTheDocument()
   })
@@ -126,15 +126,58 @@ describe('Home', () => {
     expect(textarea.value.length).toBeGreaterThan(0)
   })
 
-  it('shows the harness summary section when the Harness Summary tab is selected', async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+  it('shows the harness testing runner when the Harness Testing tab is selected', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('/api/harness/datasets')) {
+        return jsonResponse([
+          {
+            id: 'standard',
+            label: 'Standard Evaluation',
+            description: '15 enquiries',
+            n_enquiries: 15,
+            default_repeats: 1,
+            requires_upload: false,
+          },
+          {
+            id: 'custom',
+            label: 'Custom upload / paste',
+            description: 'Upload or paste',
+            n_enquiries: 0,
+            default_repeats: 1,
+            requires_upload: true,
+          },
+          {
+            id: 'single',
+            label: 'Single Enquiry',
+            description: 'One enquiry',
+            n_enquiries: 1,
+            default_repeats: 1,
+            requires_upload: true,
+          },
+        ])
+      }
+      if (url.includes('/api/harness/parse')) {
+        return jsonResponse({
+          format_detected: 'text',
+          n_enquiries: 1,
+          enquiries: [{ id: 'custom-01', text: 'preview' }],
+        })
+      }
+      if (url.includes('/api/harness/summary')) {
+        return jsonResponse(null)
+      }
+      return jsonResponse({ detail: 'Not implemented yet.' }, 501)
+    })
     const user = userEvent.setup()
     renderWithQueryClient(<Home />)
 
-    await user.click(screen.getByRole('button', { name: 'Harness Summary' }))
+    await user.click(screen.getByRole('button', { name: 'Harness Testing' }))
 
+    expect(await screen.findByRole('button', { name: 'Run harness' })).toBeInTheDocument()
+    expect(await screen.findByText('Standard Evaluation')).toBeInTheDocument()
     expect(
-      await screen.findByText(/Duplicate detection is verified independently/),
+      await screen.findByText(/Run evaluation datasets from the browser/),
     ).toBeInTheDocument()
   })
 })

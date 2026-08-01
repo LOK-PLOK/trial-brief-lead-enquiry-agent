@@ -84,6 +84,13 @@ class Run(Base):
 
     final_status: Mapped[str] = mapped_column(String, default="error")  # completed|quarantined|error
 
+    # Observability for stage failures (LLM 402, etc.). Populated when a stage
+    # raises or the harness captures an unexpected Pipeline.run() exception.
+    # Additive / nullable so existing rows remain valid.
+    error_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    traceback: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_latency_ms: Mapped[float] = mapped_column(Float, default=0.0)

@@ -6,7 +6,17 @@
  * see vite.config.ts) and in production (same-origin, single container).
  */
 
-import type { HarnessSummary, Lead, RunResult, RunSummary } from './types'
+import type {
+  HarnessDashboard,
+  HarnessDataset,
+  HarnessJob,
+  HarnessParseResult,
+  HarnessSummary,
+  Lead,
+  RunResult,
+  RunSummary,
+  TimelineEvent,
+} from './types'
 
 /**
  * Raised whenever the API responds with a non-2xx status. `detail` carries
@@ -74,6 +84,51 @@ export function getRun(runId: string): Promise<RunResult> {
 
 export function getHarnessSummary(): Promise<HarnessSummary> {
   return request<HarnessSummary>('/api/harness/summary')
+}
+
+export function listHarnessDatasets(): Promise<HarnessDataset[]> {
+  return request<HarnessDataset[]>('/api/harness/datasets')
+}
+
+export function parseHarnessInput(body: {
+  text?: string
+  filename?: string | null
+  mode?: 'auto' | 'single'
+  enquiries?: unknown
+}): Promise<HarnessParseResult> {
+  return request<HarnessParseResult>('/api/harness/parse', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function startHarnessJob(body: {
+  dataset_id: string
+  n_repeats: number
+  enquiries?: unknown
+  raw_text?: string
+  filename?: string | null
+}): Promise<HarnessJob> {
+  return request<HarnessJob>('/api/harness/jobs', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function getHarnessJob(jobId: string): Promise<HarnessJob> {
+  return request<HarnessJob>(`/api/harness/jobs/${jobId}`)
+}
+
+export function cancelHarnessJob(jobId: string): Promise<HarnessJob> {
+  return request<HarnessJob>(`/api/harness/jobs/${jobId}/cancel`, { method: 'POST' })
+}
+
+export function getHarnessDashboard(batchId: string): Promise<HarnessDashboard> {
+  return request<HarnessDashboard>(`/api/harness/batches/${batchId}/dashboard`)
+}
+
+export function getRunTimeline(runId: string): Promise<TimelineEvent[]> {
+  return request<TimelineEvent[]>(`/api/harness/runs/${runId}/timeline`)
 }
 
 export function listLeads(status?: 'accepted' | 'quarantined'): Promise<Lead[]> {

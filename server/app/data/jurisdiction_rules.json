@@ -1,20 +1,70 @@
 {
-  "_comment": "TODO(tools/lookup_jurisdiction_rule): fill in real handling rules per country once the 15 enquiry samples are supplied. Structure below is illustrative only. 'default' is the fallback used for any country not explicitly listed.",
+  "_comment": "Working jurisdiction handling rules for whisky cask enquiries (illustrative business rules, not verified legal advice), covering the countries most likely to appear in real enquiries for this trial. 'default' is the fallback used by tools/lookup_jurisdiction_rule.py for any country not explicitly listed below -- an unrecognized-but-present country is not treated as an error.",
   "rules": {
     "United Kingdom": {
       "requires_disclaimer": true,
       "restricted": false,
-      "handling_note": "TODO: placeholder rule."
+      "handling_note": "Cask whisky is an unregulated collectible in the UK; must be marketed with a clear risk disclaimer and no guaranteed-return language (FCA guidance on unregulated collective investment schemes)."
     },
     "United States": {
       "requires_disclaimer": true,
       "restricted": true,
-      "handling_note": "TODO: placeholder rule."
+      "handling_note": "Cask investment offers can be treated as securities under US law depending on structure; flag for manual compliance review before proceeding, do not process as a standard retail enquiry."
+    },
+    "Singapore": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Treated as a collectible/alternative asset; include a standard risk disclaimer, no MAS-regulated investment claims."
+    },
+    "Hong Kong": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer; avoid any language implying an SFC-regulated investment product."
+    },
+    "United Arab Emirates": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer; alcohol-related products require awareness of local distribution/import restrictions even though the cask itself is stored in bond."
+    },
+    "Australia": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer consistent with ASIC guidance on unregulated collectibles marketed as investments."
+    },
+    "Canada": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer; provincial securities regulators vary, flag high-value enquiries for review."
+    },
+    "Germany": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer consistent with BaFin's treatment of cask whisky as a non-regulated tangible asset."
+    },
+    "France": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer; AMF does not regulate cask whisky as a financial instrument, but marketing language must avoid implying otherwise."
+    },
+    "Ireland": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer consistent with the Central Bank of Ireland's treatment of cask whisky as a non-regulated tangible asset."
+    },
+    "China": {
+      "requires_disclaimer": true,
+      "restricted": true,
+      "handling_note": "Cross-border investment marketing is tightly restricted; flag for manual compliance review before proceeding."
+    },
+    "Japan": {
+      "requires_disclaimer": true,
+      "restricted": false,
+      "handling_note": "Include a standard risk disclaimer; no FSA-regulated investment claims."
     }
   },
   "default": {
     "requires_disclaimer": true,
     "restricted": false,
-    "handling_note": "TODO: placeholder fallback rule for unrecognized countries."
+    "handling_note": "Country not in the explicit rules list; apply the standard risk disclaimer and treat as unrestricted pending manual review of local regulations for this specific country."
   }
 }

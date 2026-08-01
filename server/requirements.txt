@@ -10,7 +10,9 @@ pydantic-settings==2.14.2
 SQLAlchemy==2.0.51
 httpx==0.28.1
 
-# No provider SDK is pinned yet: no concrete ModelAdapter is implemented (see
-# app/llm/factory.py), so there is nothing to import today. Add the relevant
-# SDK here (e.g. `openai==...`) when a provider is actually implemented;
-# Ollama needs no SDK regardless, it's called over plain HTTP (httpx).
+# No provider SDK is pinned: app/llm/openrouter_adapter.py (the one concrete
+# ModelAdapter implemented so far, see app/llm/factory.py) talks to
+# OpenRouter's OpenAI-compatible REST API directly over the `httpx` above --
+# no separate SDK needed. Same would go for Ollama, called the same way.
+# Add a real provider SDK here only if a future adapter actually needs one
+# (e.g. an SDK-only provider with no plain HTTP surface).

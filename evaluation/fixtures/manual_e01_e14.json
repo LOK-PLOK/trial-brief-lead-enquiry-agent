@@ -1,0 +1,61 @@
+{
+  "description": "Manual test suite E01–E14 from docs/manual_testing.md. Optional harness dataset for assessor demos (default 1 repeat).",
+  "enquiries": [
+    {
+      "id": "E01",
+      "text": "Hello,\n\nMy name is Olivia Hart. Email olivia.hart@example.com, phone +61 412 555 018. I am based in Australia.\n\nI want to buy a premium Scotch whisky cask portfolio around AUD 120,000 this month — please call me urgently.\n\nRegards,\nOlivia"
+    },
+    {
+      "id": "E02",
+      "text": "Hi — I'm Noah Berger from Toronto, Canada. Contact: noah.berger@example.ca / +1 416 555 7721.\n\nInterested in a mid-range cask, roughly CAD 25–40k, sometime in the next few months (not urgent).\n\nThanks"
+    },
+    {
+      "id": "E03",
+      "text": "Hello, I'm Priya Nair in the United Kingdom. priya.nair@example.co.uk, +44 7700 900123.\n\nJust browsing — maybe a small cask under £5,000 someday. No rush at all.\n\nCheers"
+    },
+    {
+      "id": "E04",
+      "text": "G'day, Marcus Webb here in Melbourne, Australia. marcus.webb@example.com.au / +61 398 555 441.\nLooking at a single cask around AUD 55k over the next quarter."
+    },
+    {
+      "id": "E05",
+      "text": "Bonjour, Sophie Tremblay, Montreal, Canada. sophie.tremblay@example.ca, +1 514 555 0199.\nInterested in investing about CAD 80,000 in bonded Scotch casks soon."
+    },
+    {
+      "id": "E06",
+      "text": "Dear team, James Whitfield, London, United Kingdom. james.whitfield@example.co.uk / +44 20 7946 0958.\nI'd like to place approximately £95,000 into a cask allocation within 30 days."
+    },
+    {
+      "id": "E07",
+      "text": "Hi, I'm Ava Chen in New York, United States. ava.chen@example.com, +1 212 555 0144.\nReady to allocate USD 150,000 to whisky casks this week — please expedite."
+    },
+    {
+      "id": "E08",
+      "text": "Hello again — Olivia Hart, olivia.hart@example.com, +61 412 555 018, Australia. Still interested in the AUD 120k cask portfolio, urgent."
+    },
+    {
+      "id": "E09",
+      "text": "asdf qwerty !!! ??? 12345 @@@ no name no country maybe whisky????"
+    },
+    {
+      "id": "E10",
+      "text": "Hi, I'm Daniel Okonkwo calling from Lagos. My phone is +234 801 555 0199. I am interested in a medium-budget whisky cask, no email address — please use SMS only. Not urgent."
+    },
+    {
+      "id": "E11",
+      "text": "Hi, Lena Ortiz, lena.ortiz@example.com, +34 612 555 010, Spain.\nLooking at roughly AUD 55k for one cask over the next quarter."
+    },
+    {
+      "id": "E12",
+      "text": "Hello, Raj Patel, raj.patel@example.ca, +1 604 555 0190, Canada.\nReady to invest CAD 80,000 in Scotch casks ASAP."
+    },
+    {
+      "id": "E13",
+      "text": "I'm Helen Crowe in the United Kingdom, helen.crowe@example.co.uk, +44 7700 900456.\nMaybe under £5,000 someday for a starter cask. No rush."
+    },
+    {
+      "id": "E14",
+      "text": "Name: Luca Bianchi. Email luca.bianchi@example.it. Phone +39 347 555 0188. Country: Italy.\nBudget less than €10k for a small experimental cask allocation."
+    }
+  ]
+}

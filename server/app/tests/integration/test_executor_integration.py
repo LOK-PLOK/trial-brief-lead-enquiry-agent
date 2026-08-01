@@ -162,18 +162,73 @@ def test_executor_handles_a_controlled_business_failure_from_a_real_tool(isolate
     assert result.trace.calls[0].validation_errors is None
 
 
-def test_executor_survives_the_real_tools_notimplementederror_placeholder() -> None:
-    """The real (non-mocked, no `isolated_tool_slate` here) `parse_enquiry`
-    tool's `run()` currently just raises `NotImplementedError` (business
-    logic intentionally not implemented yet). The Executor must not crash
-    when driving it."""
+def test_executor_runs_real_parse_enquiry_with_scripted_adapter() -> None:
+    """Integration: real `ParseEnquiryTool` + registry, scripted adapter.
+    Confirms the improved prompt is what the tool sends, and extracted
+    budget/urgency bands flow through the Executor unchanged (still LLM
+    extraction only — no deterministic parsers)."""
+    from app.agent.prompts.parse_enquiry_prompt import PARSE_ENQUIRY_SYSTEM_PROMPT
+    from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCompletionResponse
+    from app.schemas.extraction import BudgetBand, ExtractedFields, Urgency
+
+    captured: list[StructuredCompletionRequest] = []
+
+    class _ScriptedAdapter(ModelAdapter):
+        provider_name = "fake"
+
+        def complete_structured(self, request: StructuredCompletionRequest) -> StructuredCompletionResponse:
+            captured.append(request)
+            return StructuredCompletionResponse(
+                parsed=ExtractedFields(
+                    name="Noah Berger",
+                    email="noah.berger@example.ca",
+                    phone="+1 416 555 7721",
+                    country="Canada",
+                    budget_band=BudgetBand.MEDIUM,
+                    asset_interest="mid-range cask",
+                    urgency=Urgency.LOW,
+                ),
+                raw_response={},
+                prompt_tokens=10,
+                completion_tokens=5,
+                latency_ms=1.0,
+                model="fake-model",
+            )
+
+    enquiry = (
+        "Hi — I'm Noah Berger from Toronto, Canada. "
+        "Contact: noah.berger@example.ca / +1 416 555 7721.\n\n"
+        "Interested in a mid-range cask, roughly CAD 25–40k, "
+        "sometime in the next few months (not urgent)."
+    )
+    registry = ToolRegistry(adapter=_ScriptedAdapter())
+    plan = Plan(steps=[_step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": enquiry})])
+
+    result = run_plan(plan, enquiry, registry)
+
+    assert result.error is None
+    assert result.trace.calls[0].status == ToolCallStatus.SUCCESS
+    assert result.trace.calls[0].result["budget_band"] == "medium"
+    assert result.trace.calls[0].result["urgency"] == "low"
+    assert len(captured) == 1
+    assert captured[0].system_prompt == PARSE_ENQUIRY_SYSTEM_PROMPT
+    assert (
+        "budget_band guidance" in captured[0].system_prompt.lower()
+        or "## budget_band" in captured[0].system_prompt
+    )
+    assert "CAD 25–40k" in captured[0].user_prompt
+
+
+def test_executor_converts_unexpected_adapter_crash_to_structured_error() -> None:
+    """Unexpected exceptions from the adapter (not LLMProviderError) still
+    become a controlled Executor ERROR rather than crashing the process."""
     from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCompletionResponse
 
     class _FakeAdapter(ModelAdapter):
         provider_name = "fake"
 
         def complete_structured(self, request: StructuredCompletionRequest) -> StructuredCompletionResponse:
-            raise NotImplementedError
+            raise NotImplementedError("adapter not configured")
 
     registry = ToolRegistry(adapter=_FakeAdapter())
     plan = Plan(steps=[_step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT})])
@@ -217,6 +272,8 @@ def test_executor_stops_and_never_looks_up_the_next_tool_after_a_failure(isolate
 
 
 def test_full_canonical_plan_with_mock_tools_assembles_a_final_record(isolated_tool_slate) -> None:
+    from app.services.dedupe import compute_dedupe_hash
+
     _mock_tool(
         "parse_enquiry",
         lambda self, args: ToolResult(
@@ -243,30 +300,24 @@ def test_full_canonical_plan_with_mock_tools_assembles_a_final_record(isolated_t
             success=True, data={"score": 90, "breakdown": {"budget": 90}}, error=None, latency_ms=1.0
         ),
     )
-    _mock_tool(
-        "write_record",
-        lambda self, args: ToolResult(
-            success=True, data={"lead_id": "lead-1", "dedupe_hash": "hash-1"}, error=None, latency_ms=1.0
-        ),
-    )
     registry = ToolRegistry()
     plan = Plan(
         steps=[
             _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
             _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Singapore"}),
             _step(3, ToolName.SCORE_LEAD),
-            _step(4, ToolName.WRITE_RECORD),
         ]
     )
 
     result = run_plan(plan, ENQUIRY_TEXT, registry)
 
     assert result.error is None
-    assert len(result.trace.calls) == 4
-    assert all(c.status == ToolCallStatus.SUCCESS for c in result.trace.calls)
     assert result.final_record is not None
-    assert result.final_record.dedupe_hash == "hash-1"
+    assert result.final_record.extracted.name == "Jane Doe"
     assert result.final_record.score == 90
+    assert result.final_record.dedupe_hash == compute_dedupe_hash("jane@example.com", None)
+    assert len(result.trace.calls) == 3
+    assert all(c.tool != ToolName.WRITE_RECORD for c in result.trace.calls)
 
 
 def test_isolated_tool_slate_restores_the_real_tool_after_teardown() -> None:

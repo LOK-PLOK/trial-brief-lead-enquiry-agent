@@ -1,4 +1,65 @@
 {
-  "_comment": "TODO(evaluation/fixtures): replace with the 15 enquiry samples once supplied (per docs/Trial_Brief_Paul_Detablan.md section 3.1, 'I will supply 15 enquiry samples on the Monday morning'). Each entry needs a stable `id` so harness runs/metrics can be grouped by enquiry across the 3 repeats (docs/architecture.md section 11).",
-  "enquiries": []
+  "_comment": "15 fictional enquiry samples for the 45-run harness (docs/Trial_Brief_Paul_Detablan.md §3.1 / §3.6). These are stand-ins for the samples the brief said would be supplied Monday morning — replace with the official set when available. All names/contacts are fictional. Stable `id` values support variance grouping across 3 repeats.",
+  "enquiries": [
+    {
+      "id": "enq-01",
+      "text": "Hello, I'm Marcus Chen, marcus.chen@example.com, +65 8123 4567. Based in Singapore. Looking at a single malt cask around SGD 25,000. Would like to proceed this quarter if possible."
+    },
+    {
+      "id": "enq-02",
+      "text": "Hi there — Priya Nair here (priya.nair@example.co.uk / +44 7700 900221). UK resident. Interested in a small tasting-level outlay, maybe a few hundred pounds, nothing urgent."
+    },
+    {
+      "id": "enq-03",
+      "text": "Name: Jordan Blake. Email: jordan.blake@example.com. Phone: +1 212 555 0144. Country: United States. Budget band feels high — six figures if the cask provenance is right. Need docs ASAP."
+    },
+    {
+      "id": "enq-04",
+      "text": "Good afternoon. Elena Rossi, elena.rossi@example.it, +39 333 555 0199, Italy. Curious about whisky cask investment for a medium portfolio allocation. No rush — researching options."
+    },
+    {
+      "id": "enq-05",
+      "text": "I'm Tom Hughes from Australia. tom.hughes@example.com.au, +61 412 555 678. Looking at mid-range cask buys (~AUD 40k). Prefer to move in the next few weeks."
+    },
+    {
+      "id": "enq-06",
+      "text": "Please call me back: Aisha Rahman, aisha.rahman@example.ae, +971 50 555 0123, UAE. Interested in premium casks, high budget, timeline flexible."
+    },
+    {
+      "id": "enq-07",
+      "text": "Low commitment enquiry from Chris Patel (chris.patel@example.com). Phone +353 87 555 0198, Ireland. Just browsing entry-level options under €2k. Not urgent."
+    },
+    {
+      "id": "enq-08",
+      "text": "Wei Lin, wei.lin@example.sg, +65 9012 3344, Singapore. Want a diversified cask portfolio, roughly medium budget, ready to decide after one call."
+    },
+    {
+      "id": "enq-09",
+      "text": "Hi — Sophie Martin from France. sophie.martin@example.fr / +33 6 12 34 56 78. Exploring whisky casks as an alternative asset. Budget unclear for now. Low urgency."
+    },
+    {
+      "id": "enq-10",
+      "text": "Daniel Okonkwo, daniel.okonkwo@example.ng, +234 801 555 0190, Nigeria. High net-worth interest in rare casks. Need compliance guidance and can move quickly."
+    },
+    {
+      "id": "enq-11",
+      "text": "Enquiry from Mina Andersson (mina.andersson@example.se, +46 70 555 01 22), Sweden. Medium budget, interested in a single Speyside cask. Prefer next-month close."
+    },
+    {
+      "id": "enq-12",
+      "text": "I'm calling about cask investing. Name: Hiro Tanaka. Email hiro.tanaka@example.jp. Phone +81 90 1234 5678. Japan. Budget low-to-medium. No deadline."
+    },
+    {
+      "id": "enq-13",
+      "text": "Laura Bennett, laura.bennett@example.ca, +1 416 555 0188, Canada. High urgency — inheritance funds need allocating this month. High budget for a few casks."
+    },
+    {
+      "id": "enq-14",
+      "text": "Anonymous web form: interested in whisky casks, heard you from a friend in Hong Kong. No name left. Email maybe contact@example.invalid. Budget unknown."
+    },
+    {
+      "id": "enq-15",
+      "text": "Final sample: Omar Farouk, omar.farouk@example.eg, +20 100 555 0199, Egypt. Medium urgency, medium budget, asset interest: bourbon and Scotch casks for a small fund."
+    }
+  ]
 }

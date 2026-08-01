@@ -132,6 +132,7 @@ def build_plan(enquiry_text: str, tool_manifest: list[dict], adapter: ModelAdapt
                 user_prompt=user_prompt,
                 response_schema=Plan,
                 model=model,
+                max_tokens=1024,
                 metadata={"run_id": run_id_ctx.get(), "stage": "planner", "attempt": attempt},
             )
 

@@ -16,15 +16,59 @@ import pytest
 
 from app.agent import verifier as verifier_module
 from app.agent.prompts import planner_prompt, verifier_prompt
-from app.agent.verifier import VerifierValidationError, _detect_plan_deviation, verify
+from app.agent.verifier import (
+    VerifierValidationError,
+    _apply_extracted_contradiction_gate,
+    _detect_derived_field_fabrication,
+    _detect_plan_deviation,
+    _reason_self_contradicts_claim,
+    _strip_self_contradictory_claims,
+    verify,
+)
+from app.schemas.verifier import ExtractedFieldLabel, ExtractedFieldVerdict
 from app.core.config import Settings
 from app.core.logging import run_id_ctx, stage_ctx
 from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCompletionResponse
 from app.schemas.plan import Plan, PlanStep, ToolName
 from app.schemas.tool_trace import ToolCall, ToolCallStatus, ToolCallTrace
 from app.schemas.verifier import VerifierDecision
+from app.services.dedupe import compute_dedupe_hash
 
 ENQUIRY_TEXT = "Hi, I'm Jane Doe, jane@example.com, interested in whisky casks in Singapore."
+
+LOOKUP_RESULT = {
+    "country": "Singapore",
+    "requires_disclaimer": True,
+    "restricted": False,
+    "handling_note": "Standard risk disclaimer for Singapore collectibles.",
+}
+
+SCORE_RESULT = {
+    "score": 80,
+    "breakdown": {"budget": 40, "urgency": 20, "jurisdiction_risk": 20},
+}
+
+PARSE_RESULT = {
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "phone": None,
+    "country": "Singapore",
+    "budget_band": "high",
+    "asset_interest": "whisky casks",
+    "urgency": "medium",
+}
+
+WRITE_RESULT = {
+    "lead_id": "lead-1",
+    "dedupe_hash": compute_dedupe_hash("jane@example.com", None),
+}
+
+_DEFAULT_RESULTS: dict[ToolName, dict] = {
+    ToolName.PARSE_ENQUIRY: PARSE_RESULT,
+    ToolName.LOOKUP_JURISDICTION_RULE: LOOKUP_RESULT,
+    ToolName.SCORE_LEAD: SCORE_RESULT,
+    ToolName.WRITE_RECORD: WRITE_RESULT,
+}
 
 
 def _plan(*tools: ToolName) -> Plan:
@@ -36,25 +80,36 @@ def _plan(*tools: ToolName) -> Plan:
     )
 
 
-def _trace(*tools: ToolName, statuses: list[str] | None = None) -> ToolCallTrace:
+def _trace(
+    *tools: ToolName,
+    statuses: list[str] | None = None,
+    results: dict[ToolName, dict] | None = None,
+) -> ToolCallTrace:
     statuses = statuses or [ToolCallStatus.SUCCESS] * len(tools)
     now = datetime.now(UTC)
-    return ToolCallTrace(
-        calls=[
+    calls = []
+    for i, (tool, status) in enumerate(zip(tools, statuses), start=1):
+        if status == ToolCallStatus.SUCCESS:
+            if results is not None and tool in results:
+                result = results[tool]
+            else:
+                result = dict(_DEFAULT_RESULTS.get(tool, {}))
+        else:
+            result = None
+        calls.append(
             ToolCall(
                 step=i,
                 tool=tool,
                 args={},
                 status=status,
-                result={} if status == ToolCallStatus.SUCCESS else None,
+                result=result,
                 error=None if status == ToolCallStatus.SUCCESS else "failed",
                 latency_ms=1.0,
                 started_at=now,
                 finished_at=now,
             )
-            for i, (tool, status) in enumerate(zip(tools, statuses), start=1)
-        ]
-    )
+        )
+    return ToolCallTrace(calls=calls)
 
 
 CANONICAL_TOOLS = (
@@ -65,11 +120,11 @@ CANONICAL_TOOLS = (
 )
 
 FINAL_RECORD = {
-    "extracted": {"name": "Jane Doe", "email": "jane@example.com"},
-    "jurisdiction_rule": {"country": "Singapore"},
-    "score": 80,
-    "score_breakdown": {"budget": 40},
-    "dedupe_hash": "abc123",
+    "extracted": dict(PARSE_RESULT),
+    "jurisdiction_rule": dict(LOOKUP_RESULT),
+    "score": SCORE_RESULT["score"],
+    "score_breakdown": dict(SCORE_RESULT["breakdown"]),
+    "dedupe_hash": WRITE_RESULT["dedupe_hash"],
 }
 
 
@@ -149,7 +204,7 @@ class TestVerifyHappyPath:
         user_prompt = adapter.requests[0].user_prompt
         assert "jane@example.com" in user_prompt  # enquiry text
         assert "parse_enquiry" in user_prompt  # plan
-        assert "abc123" in user_prompt  # final record's dedupe_hash
+        assert WRITE_RESULT["dedupe_hash"] in user_prompt  # final record's dedupe_hash
 
     def test_request_carries_no_conversation_history(self) -> None:
         """Every call is a fresh, isolated StructuredCompletionRequest --
@@ -206,6 +261,150 @@ class TestVerifyFabricationPassthrough:
         assert result.fabrication_detected is True
         assert result.fabricated_fields == ["phone"]
         assert "phone" in result.reason.lower()
+
+
+class TestFabricationReconciliation:
+    """LLM fabrication claims on tool-derived / computed fields must be
+    cleared when deterministic evidence proves those fields match."""
+
+    def test_clears_llm_claims_on_matching_handling_note_and_dedupe_hash(self) -> None:
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=[
+                            "dedupe_hash",
+                            "jurisdiction_rule.handling_note",
+                            "jurisdiction_rule.requires_disclaimer",
+                        ],
+                        reason=(
+                            "handling_note / requires_disclaimer / dedupe_hash do not "
+                            "appear in the enquiry text"
+                        ),
+                    )
+                )
+            ]
+        )
+        # Pre-persist shape: no write_record in the verify-time trace.
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        decision = verify(ENQUIRY_TEXT, _plan(*tools), _trace(*tools), FINAL_RECORD, adapter)
+        assert decision.fabrication_detected is False
+        assert decision.fabricated_fields == []
+        assert decision.passed is True
+
+    def test_clears_llm_score_claim_when_score_matches_tool(self) -> None:
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["score", "score_breakdown"],
+                        reason="score not in enquiry",
+                    )
+                )
+            ]
+        )
+        decision = verify(
+            ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+        )
+        assert decision.fabrication_detected is False
+        assert decision.passed is True
+
+    def test_keeps_extracted_claim_while_clearing_matching_derived(self) -> None:
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["email", "handling_note", "dedupe_hash"],
+                        reason="mixed claims",
+                    )
+                )
+            ]
+        )
+        decision = verify(
+            ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+        )
+        assert decision.fabrication_detected is True
+        assert decision.passed is False
+        assert decision.fabricated_fields == ["email"]
+
+    def test_keeps_derived_claim_when_tool_output_mismatches(self) -> None:
+        altered = {
+            **FINAL_RECORD,
+            "jurisdiction_rule": {**LOOKUP_RESULT, "handling_note": "tampered"},
+        }
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["jurisdiction_rule.handling_note"],
+                        reason="handling_note not in enquiry",
+                    )
+                )
+            ]
+        )
+        decision = verify(ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), altered, adapter)
+        assert decision.fabrication_detected is True
+        assert decision.passed is False
+        fields = decision.fabricated_fields
+        assert "jurisdiction_rule" in fields or "handling_note" in fields
+
+    def test_keeps_dedupe_hash_claim_when_recompute_fails(self) -> None:
+        altered = {**FINAL_RECORD, "dedupe_hash": "not-the-real-hash"}
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["dedupe_hash"],
+                        reason="dedupe_hash not in enquiry",
+                    )
+                )
+            ]
+        )
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        decision = verify(ENQUIRY_TEXT, _plan(*tools), _trace(*tools), altered, adapter)
+        assert decision.fabrication_detected is True
+        assert "dedupe_hash" in decision.fabricated_fields
+        assert decision.passed is False
+
+    def test_does_not_clear_extracted_fields_via_deterministic_match(self) -> None:
+        """Even when the whole record matches tools, an extracted-field LLM
+        claim must survive (enquiry-only validation)."""
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["phone"],
+                        reason="phone not supported by enquiry",
+                    )
+                )
+            ]
+        )
+        decision = verify(
+            ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+        )
+        assert decision.fabricated_fields == ["phone"]
+        assert decision.fabrication_detected is True
+        assert decision.passed is False
 
 
 class TestDetectPlanDeviation:
@@ -345,14 +544,18 @@ class TestVerifyLogging:
         adapter = FakeAdapter([_response_for(decision)])
 
         with caplog.at_level(logging.INFO, logger="app.agent.verifier"):
-            verify(ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter)
+            result = verify(
+                ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+            )
 
         matching = [r for r in caplog.records if getattr(r, "event", None) == "verifier_llm_call"]
         assert len(matching) == 1
         record = matching[0]
         assert record.system_prompt
         assert record.user_prompt
-        assert record.response == decision.model_dump(mode="json", by_alias=True)
+        # Logged response is the post-gate decision (may include deterministic
+        # extracted_field_verdicts even when the raw LLM omitted them).
+        assert record.response == result.model_dump(mode="json", by_alias=True)
         assert record.latency_ms == 15.5
         assert record.prompt_tokens == 200
         assert record.completion_tokens == 60
@@ -497,3 +700,1333 @@ class TestVerifierIndependence:
         request = adapter.requests[0]
         assert request.system_prompt == verifier_prompt.VERIFIER_SYSTEM_PROMPT
         assert request.system_prompt != planner_prompt.PLANNER_SYSTEM_PROMPT
+
+
+class TestVerifierPromptExtractedVsDerived:
+    def test_system_prompt_defines_extracted_and_derived_categories(self) -> None:
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert "EXTRACTED FIELDS" in prompt
+        assert "DERIVED FIELDS" in prompt
+        assert "NEVER: planner placeholder arguments" in prompt or "must NEVER be used as evidence" in prompt
+        assert "ONLY against successful tool outputs" in prompt
+        assert "NOT fabrication merely because it does not appear in the" in prompt
+        assert "enquiry text" in prompt
+
+    def test_system_prompt_uses_supported_contradicted_insufficient(self) -> None:
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert "NOT a second extractor" in prompt
+        assert "NOT re-extracting" in prompt or "NOT\nre-extracting" in prompt
+        assert "extracted_field_verdicts" in prompt
+        assert "SUPPORTED" in prompt
+        assert "CONTRADICTED" in prompt
+        assert "INSUFFICIENT_EVIDENCE" in prompt
+        assert "reasonable extractor" in prompt
+        assert "Difference of interpretation is NOT" in prompt
+        assert "ONLY this label" in prompt or "only CONTRADICTED" in prompt.lower()
+
+    def test_system_prompt_worked_urgency_examples(self) -> None:
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert '"No rush at all"' in prompt or "No rush at all" in prompt
+        assert '"Not urgent"' in prompt or "Not urgent" in prompt
+        assert "next few months (not urgent)" in prompt
+        assert "Within 30 days" in prompt or "within 30 days" in prompt
+        assert "ASAP" in prompt
+        assert "Returning `low` is CONTRADICTED" in prompt or "low` is CONTRADICTED" in prompt
+
+    def test_user_prompt_reminds_support_framework(self) -> None:
+        text = verifier_prompt.build_verifier_user_prompt("hi", {"steps": []}, {"calls": []}, {})
+        assert "NOT a second extractor" in text
+        assert "extracted_field_verdicts" in text
+        assert "SUPPORTED / CONTRADICTED / INSUFFICIENT_EVIDENCE" in text
+        assert "Only CONTRADICTED may appear in fabricated_fields" in text
+        assert "AUD 120,000" in text
+        assert "No rush at all" in text or "not urgent" in text.lower()
+
+    def test_user_prompt_reminds_split_rules_and_redacts_plan_args(self) -> None:
+        text = verifier_prompt.build_verifier_user_prompt(
+            "hi",
+            {
+                "steps": [
+                    {
+                        "step": 1,
+                        "tool": "parse_enquiry",
+                        "args": {"enquiry_text": "hi"},
+                        "rationale": "x",
+                    },
+                    {
+                        "step": 3,
+                        "tool": "score_lead",
+                        "args": {
+                            "extracted": {"budget_band": "unknown", "urgency": "unknown"},
+                            "jurisdiction_rule": {"handling_note": ""},
+                        },
+                        "rationale": "y",
+                    },
+                ]
+            },
+            {"calls": []},
+            {},
+        )
+        assert "parse_enquiry" in text
+        assert "Never use planner placeholders" in text or "non-authoritative" in text.lower()
+        assert "dedupe_hash" in text
+        assert '"budget_band": "unknown"' not in text
+        assert '"urgency": "unknown"' not in text
+        assert '"_redacted"' in text
+
+
+class TestManualEnquiryUrgencySupportPasses:
+    """E01 / E02 / E10 style: parser urgency=low is SUPPORTED → PASS.
+    Prompt must encode the support framework; verify() pass-through when
+    the LLM follows it (scripted). Deterministic checks unchanged.
+    """
+
+    def _verify(
+        self,
+        enquiry: str,
+        *,
+        urgency: str,
+        budget_band: str = "high",
+        name: str = "Test Lead",
+        email: str = "test@example.com",
+        country: str = "Australia",
+    ) -> VerifierDecision:
+        parse = {
+            "name": name,
+            "email": email,
+            "phone": "+61 400 000 000",
+            "country": country,
+            "budget_band": budget_band,
+            "asset_interest": "whisky casks",
+            "urgency": urgency,
+        }
+        urgency_pts = {"low": 5, "medium": 15, "high": 30, "unknown": 0}[urgency]
+        budget_pts = {"low": 10, "medium": 25, "high": 40, "unknown": 0}[budget_band]
+        breakdown = {
+            "budget": budget_pts,
+            "urgency": urgency_pts,
+            "jurisdiction_risk": 15,
+        }
+        record = {
+            "extracted": dict(parse),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": sum(breakdown.values()),
+            "score_breakdown": breakdown,
+            "dedupe_hash": compute_dedupe_hash(parse["email"], parse["phone"]),
+        }
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        trace = _trace(
+            *tools,
+            results={
+                ToolName.PARSE_ENQUIRY: parse,
+                ToolName.LOOKUP_JURISDICTION_RULE: LOOKUP_RESULT,
+                ToolName.SCORE_LEAD: {"score": record["score"], "breakdown": breakdown},
+            },
+        )
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        return verify(enquiry, _plan(*tools), trace, record, adapter)
+
+    def test_e01_no_rush_at_all_low_passes(self) -> None:
+        # Manual E01-style support path: "No rush at all" → urgency=low SUPPORTED.
+        decision = self._verify(
+            "Just browsing — maybe a small cask under £5,000 someday. No rush at all.",
+            urgency="low",
+            budget_band="low",
+            name="Priya Nair",
+            email="priya.nair@example.co.uk",
+            country="United Kingdom",
+        )
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert "No rush at all" in prompt
+        assert "SUPPORTED" in prompt
+
+    def test_e02_next_few_months_not_urgent_low_passes(self) -> None:
+        enquiry = (
+            "Hi — I'm Noah Berger from Toronto, Canada. "
+            "Contact: noah.berger@example.ca / +1 416 555 7721.\n\n"
+            "Interested in a mid-range cask, roughly CAD 25–40k, "
+            "sometime in the next few months (not urgent).\n\nThanks"
+        )
+        decision = self._verify(
+            enquiry,
+            urgency="low",
+            budget_band="medium",
+            name="Noah Berger",
+            email="noah.berger@example.ca",
+            country="Canada",
+        )
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert "next few months (not urgent)" in prompt
+        assert "medium may also be reasonable" in prompt
+
+    def test_e10_not_urgent_low_passes(self) -> None:
+        enquiry = (
+            "Hi, I'm Daniel Okonkwo calling from Lagos. My phone is +234 801 555 0199. "
+            "I am interested in a medium-budget whisky cask, no email address — "
+            "please use SMS only. Not urgent."
+        )
+        decision = self._verify(
+            enquiry,
+            urgency="low",
+            budget_band="medium",
+            name="Daniel Okonkwo",
+            email="unused@example.com",
+            country="Nigeria",
+        )
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+        assert '"Not urgent"' in verifier_prompt.VERIFIER_SYSTEM_PROMPT
+
+    def test_prompt_requires_structured_verdicts_and_contradiction_only_fabricates(self) -> None:
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert "extracted_field_verdicts" in prompt
+        assert "INSUFFICIENT_EVIDENCE" in prompt
+        assert "fabricated_fields" in prompt
+        user = verifier_prompt.build_verifier_user_prompt("x", {"steps": []}, {"calls": []}, {})
+        assert "Only CONTRADICTED may appear in fabricated_fields" in user
+
+    def test_e06_medium_for_95k_remains_contradicted_in_prompt(self) -> None:
+        """E06: medium for £95k is CONTRADICTED by thresholds — not preference."""
+        prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        assert "£95,000" in prompt or "95,000" in prompt
+        assert "CONTRADICTED" in prompt
+        assert "70k" in prompt or "70,000" in prompt
+        assert "medium" in prompt.lower()
+
+
+class TestUrgencySupportedEnumPasses:
+    """Additional supported-urgency pass-through cases."""
+
+    def _verify_urgency(
+        self,
+        enquiry: str,
+        *,
+        urgency: str,
+        budget_band: str = "unknown",
+    ) -> VerifierDecision:
+        parse = {
+            "name": "Test Lead",
+            "email": "test@example.com",
+            "phone": None,
+            "country": "United Kingdom",
+            "budget_band": budget_band,
+            "asset_interest": "whisky casks",
+            "urgency": urgency,
+        }
+        record = {
+            "extracted": dict(parse),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": 15,
+            "score_breakdown": {"budget": 0, "urgency": 0, "jurisdiction_risk": 15},
+            "dedupe_hash": compute_dedupe_hash(parse["email"], parse["phone"]),
+        }
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        breakdown = {
+            "low": {"budget": 0, "urgency": 5, "jurisdiction_risk": 15},
+            "medium": {"budget": 0, "urgency": 15, "jurisdiction_risk": 15},
+            "high": {"budget": 0, "urgency": 30, "jurisdiction_risk": 15},
+            "unknown": {"budget": 0, "urgency": 0, "jurisdiction_risk": 15},
+        }[urgency]
+        record["score_breakdown"] = breakdown
+        record["score"] = sum(breakdown.values())
+        trace = _trace(
+            *tools,
+            results={
+                ToolName.PARSE_ENQUIRY: parse,
+                ToolName.LOOKUP_JURISDICTION_RULE: LOOKUP_RESULT,
+                ToolName.SCORE_LEAD: {"score": record["score"], "breakdown": breakdown},
+            },
+        )
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        return verify(enquiry, _plan(*tools), trace, record, adapter)
+
+    def test_not_urgent_to_low_passes(self) -> None:
+        decision = self._verify_urgency("Please call when you can. Not urgent.", urgency="low")
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+
+    def test_no_rush_to_low_passes(self) -> None:
+        decision = self._verify_urgency("Interested in a cask. No rush.", urgency="low")
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+
+    def test_someday_to_low_passes(self) -> None:
+        decision = self._verify_urgency("Maybe a cask someday.", urgency="low")
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+
+    def test_asap_to_high_passes(self) -> None:
+        decision = self._verify_urgency("Need docs ASAP for the cask allocation.", urgency="high")
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+
+    def test_within_30_days_medium_passes(self) -> None:
+        decision = self._verify_urgency(
+            "I'd like to place funds within 30 days.", urgency="medium"
+        )
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+        assert "Within 30 days" in verifier_prompt.VERIFIER_SYSTEM_PROMPT or (
+            "within 30 days" in verifier_prompt.VERIFIER_SYSTEM_PROMPT
+        )
+
+
+class TestPlannerPlaceholdersDoNotDriveFabrication:
+    """Regression for run 5c056b3d…: planner args like budget_band=unknown
+    must not cause fabrication when parse_enquiry / lookup match final_record.
+    """
+
+    def _priya_shaped_plan(self) -> Plan:
+        return Plan(
+            steps=[
+                PlanStep(
+                    step=1,
+                    tool=ToolName.PARSE_ENQUIRY,
+                    args={"enquiry_text": ENQUIRY_TEXT},
+                    rationale="extract",
+                ),
+                PlanStep(
+                    step=2,
+                    tool=ToolName.LOOKUP_JURISDICTION_RULE,
+                    args={"country": "UK"},
+                    rationale="lookup",
+                ),
+                PlanStep(
+                    step=3,
+                    tool=ToolName.SCORE_LEAD,
+                    args={
+                        "extracted": {
+                            "name": "Jane Doe",
+                            "email": "jane@example.com",
+                            "budget_band": "unknown",
+                            "urgency": "unknown",
+                            "country": "UK",
+                        },
+                        "jurisdiction_rule": {
+                            "country": "UK",
+                            "requires_disclaimer": False,
+                            "restricted": False,
+                            "handling_note": "",
+                        },
+                    },
+                    rationale="score",
+                ),
+            ]
+        )
+
+    def test_planner_unknown_budget_but_parse_low_passes(self) -> None:
+        parse = {**PARSE_RESULT, "budget_band": "low", "urgency": "low"}
+        record = {
+            "extracted": dict(parse),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": 30,
+            "score_breakdown": {"budget": 10, "urgency": 5, "jurisdiction_risk": 15},
+            "dedupe_hash": compute_dedupe_hash(parse["email"], parse["phone"]),
+        }
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        trace = _trace(
+            *tools,
+            results={
+                ToolName.PARSE_ENQUIRY: parse,
+                ToolName.LOOKUP_JURISDICTION_RULE: LOOKUP_RESULT,
+                ToolName.SCORE_LEAD: {"score": 30, "breakdown": record["score_breakdown"]},
+            },
+        )
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        decision = verify(ENQUIRY_TEXT, self._priya_shaped_plan(), trace, record, adapter)
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+        user_prompt = adapter.requests[0].user_prompt
+        assert '"budget_band": "unknown"' not in user_prompt
+        assert '"urgency": "unknown"' not in user_prompt
+        # Successful parse values remain visible in the trace section.
+        assert '"budget_band": "low"' in user_prompt
+
+    def test_planner_placeholder_jurisdiction_ignored_when_lookup_matches_final(self) -> None:
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        record = {
+            "extracted": dict(PARSE_RESULT),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": SCORE_RESULT["score"],
+            "score_breakdown": dict(SCORE_RESULT["breakdown"]),
+            "dedupe_hash": WRITE_RESULT["dedupe_hash"],
+        }
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["jurisdiction_rule"],
+                        reason="planner jurisdiction stub disagreed",
+                    )
+                )
+            ]
+        )
+        decision = verify(
+            ENQUIRY_TEXT,
+            self._priya_shaped_plan(),
+            _trace(*tools),
+            record,
+            adapter,
+        )
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+        assert decision.fabricated_fields == []
+
+    def test_actual_parse_enquiry_mismatch_still_fails(self) -> None:
+        altered = {
+            **FINAL_RECORD,
+            "extracted": {**PARSE_RESULT, "budget_band": "low"},
+        }
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        decision = verify(ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), altered, adapter)
+        assert decision.passed is False
+        assert decision.fabrication_detected is True
+        assert "budget_band" in decision.fabricated_fields
+
+    def test_actual_tool_derived_mismatch_still_fails(self) -> None:
+        altered = {
+            **FINAL_RECORD,
+            "jurisdiction_rule": {**LOOKUP_RESULT, "handling_note": "tampered"},
+        }
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        decision = verify(ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), altered, adapter)
+        assert decision.passed is False
+        assert decision.fabrication_detected is True
+        fields = decision.fabricated_fields
+        assert "jurisdiction_rule" in fields or "handling_note" in fields
+
+
+class TestDerivedFieldFabricationDetection:
+    """Deterministic derived-field checks (architecture: tool outputs are
+    valid evidence; altering them is fabrication)."""
+
+    def test_pass_when_handling_note_matches_lookup(self) -> None:
+        assert _detect_derived_field_fabrication(_trace(*CANONICAL_TOOLS), FINAL_RECORD) == []
+
+    def test_pass_when_score_matches_score_lead(self) -> None:
+        assert "score" not in _detect_derived_field_fabrication(_trace(*CANONICAL_TOOLS), FINAL_RECORD)
+
+    def test_pass_when_jurisdiction_rule_matches_lookup(self) -> None:
+        assert "jurisdiction_rule" not in _detect_derived_field_fabrication(
+            _trace(*CANONICAL_TOOLS), FINAL_RECORD
+        )
+
+    def test_fail_when_executor_changes_handling_note(self) -> None:
+        altered = {
+            **FINAL_RECORD,
+            "jurisdiction_rule": {
+                **LOOKUP_RESULT,
+                "handling_note": "INVENTED NOTE NOT FROM TOOL",
+            },
+        }
+        fields = _detect_derived_field_fabrication(_trace(*CANONICAL_TOOLS), altered)
+        assert "handling_note" in fields or "jurisdiction_rule" in fields
+
+    def test_fail_when_executor_changes_score(self) -> None:
+        altered = {**FINAL_RECORD, "score": 1}
+        assert "score" in _detect_derived_field_fabrication(_trace(*CANONICAL_TOOLS), altered)
+
+    def test_fail_when_score_invented_without_score_lead_output(self) -> None:
+        tools = (ToolName.PARSE_ENQUIRY, ToolName.LOOKUP_JURISDICTION_RULE)
+        record = {
+            "extracted": dict(PARSE_RESULT),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": 99,
+            "score_breakdown": {"budget": 99},
+            "dedupe_hash": WRITE_RESULT["dedupe_hash"],
+        }
+        fields = _detect_derived_field_fabrication(_trace(*tools), record)
+        assert "score" in fields
+
+    def test_verify_overrides_pass_when_handling_note_tampered(self) -> None:
+        altered = {
+            **FINAL_RECORD,
+            "jurisdiction_rule": {**LOOKUP_RESULT, "handling_note": "tampered"},
+        }
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        decision = verify(ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), altered, adapter)
+        assert decision.passed is False
+        assert decision.fabrication_detected is True
+        fields = decision.fabricated_fields
+        assert "jurisdiction_rule" in fields or "handling_note" in fields
+
+    def test_verify_passes_when_derived_fields_match_and_model_passes(self) -> None:
+        adapter = FakeAdapter([_response_for(_passing_decision())])
+        decision = verify(
+            ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+        )
+        assert decision.passed is True
+        assert decision.fabrication_detected is False
+
+
+class TestExtractedFieldFabricationIsLeftToModel:
+    """Extracted-field fabrication remains an LLM judgment against the
+    enquiry; the deterministic layer must not invent it. Regression tests
+    document the expected model contract via the prompt + a scripted fail."""
+
+    def test_model_fabricated_email_is_returned(self) -> None:
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["email"],
+                        reason="email not in enquiry",
+                    )
+                )
+            ]
+        )
+        decision = verify(
+            ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+        )
+        assert decision.fabrication_detected is True
+        assert "email" in decision.fabricated_fields
+
+    def test_model_fabricated_country_is_returned(self) -> None:
+        adapter = FakeAdapter(
+            [
+                _response_for(
+                    _passing_decision(
+                        passed=False,
+                        fabrication_detected=True,
+                        fabricated_fields=["country"],
+                        reason="country not in enquiry",
+                    )
+                )
+            ]
+        )
+        decision = verify(
+            ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), FINAL_RECORD, adapter
+        )
+        assert "country" in decision.fabricated_fields
+
+
+class TestSelfContradictionUnitChecks:
+    """Direct unit tests for the deterministic consistency validator's
+    text-matching helpers, independent of the full `verify()` pipeline."""
+
+    def test_example_a_budget_high_restated_in_justification(self) -> None:
+        reason = (
+            'budget_band "high" is CONTRADICTED because AUD 120,000 clearly falls '
+            "into the high category."
+        )
+        assert _reason_self_contradicts_claim(reason, "budget_band", "high") is True
+
+    def test_example_b_urgency_low_explicitly_supported_and_fabricated(self) -> None:
+        reason = 'urgency "low" is supported by "No rush at all" but is fabricated.'
+        assert _reason_self_contradicts_claim(reason, "urgency", "low") is True
+
+    def test_example_c_urgency_high_justified_by_high_signal_phrase(self) -> None:
+        reason = (
+            'urgency "high" is contradicted because the enquiry says '
+            '"please call me urgently."'
+        )
+        assert _reason_self_contradicts_claim(reason, "urgency", "high") is True
+
+    def test_genuine_contradiction_with_opposing_signal_is_not_cleared(self) -> None:
+        reason = (
+            'urgency "high" is CONTRADICTED because the enquiry clearly states '
+            '"not urgent," so high is fabricated.'
+        )
+        assert _reason_self_contradicts_claim(reason, "urgency", "high") is False
+
+    def test_unrelated_field_reason_does_not_match(self) -> None:
+        reason = 'country "Singapore" does not appear anywhere in the enquiry text.'
+        assert _reason_self_contradicts_claim(reason, "urgency", "low") is False
+
+    def test_strip_clears_only_the_self_contradictory_field(self) -> None:
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency", "email"],
+            reason=(
+                'urgency "low" is supported by "Not urgent" but is fabricated. '
+                "email does not appear anywhere in the enquiry."
+            ),
+        )
+        cleaned, warnings = _strip_self_contradictory_claims(
+            decision, {"extracted": {"urgency": "low", "email": "x@example.com"}}
+        )
+        assert cleaned.fabricated_fields == ["email"]
+        assert cleaned.fabrication_detected is True
+        assert cleaned.passed is False
+        assert len(warnings) == 1
+        assert "urgency" in warnings[0]
+
+    def test_strip_is_noop_when_no_contradiction_present(self) -> None:
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["email"],
+            reason="email not in enquiry",
+        )
+        cleaned, warnings = _strip_self_contradictory_claims(
+            decision, {"extracted": {"email": "x@example.com"}}
+        )
+        assert cleaned is decision
+        assert warnings == []
+
+
+class TestVerifierConsistencyValidatorEndToEnd:
+    """Regression tests for the new deterministic post-verifier consistency
+    validator: a self-contradictory LLM decision (the reason affirms the
+    same value it lists as fabricated) must never quarantine an otherwise
+    correct run. Covers E01, E02, E10, and the "Olivia Hart" (AUD 120,000)
+    scenario from the reported failure modes.
+    """
+
+    def _record_and_trace(
+        self,
+        *,
+        urgency: str,
+        budget_band: str,
+        name: str,
+        email: str,
+        phone: str | None,
+        country: str,
+    ) -> tuple[dict, ToolCallTrace, tuple[ToolName, ...]]:
+        parse = {
+            "name": name,
+            "email": email,
+            "phone": phone,
+            "country": country,
+            "budget_band": budget_band,
+            "asset_interest": "whisky cask portfolio",
+            "urgency": urgency,
+        }
+        record = {
+            "extracted": dict(parse),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": 90,
+            "score_breakdown": {"budget": 40, "urgency": 30, "jurisdiction_risk": 20},
+            "dedupe_hash": compute_dedupe_hash(parse["email"], parse["phone"]),
+        }
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        trace = _trace(
+            *tools,
+            results={
+                ToolName.PARSE_ENQUIRY: parse,
+                ToolName.LOOKUP_JURISDICTION_RULE: LOOKUP_RESULT,
+                ToolName.SCORE_LEAD: {
+                    "score": record["score"],
+                    "breakdown": record["score_breakdown"],
+                },
+            },
+        )
+        return record, trace, tools
+
+    def _verify(
+        self,
+        enquiry: str,
+        decision: VerifierDecision,
+        *,
+        urgency: str,
+        budget_band: str,
+        name: str = "Test Lead",
+        email: str = "test@example.com",
+        phone: str | None = "+1 555 000 0000",
+        country: str = "United Kingdom",
+    ) -> VerifierDecision:
+        record, trace, tools = self._record_and_trace(
+            urgency=urgency,
+            budget_band=budget_band,
+            name=name,
+            email=email,
+            phone=phone,
+            country=country,
+        )
+        adapter = FakeAdapter([_response_for(decision)])
+        return verify(enquiry, _plan(*tools), trace, record, adapter)
+
+    def test_olivia_hart_aud_120k_budget_contradiction_is_discarded(self) -> None:
+        """Example A: budget_band 'high' is CONTRADICTED because AUD 120,000
+        clearly falls into the high category -- self-contradictory."""
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["budget_band"],
+            reason=(
+                'budget_band "high" is CONTRADICTED because AUD 120,000 clearly '
+                "falls into the high category."
+            ),
+        )
+        result = self._verify(
+            "I want to buy a premium Scotch whisky cask portfolio around "
+            "AUD 120,000 this month — please call me urgently.",
+            decision,
+            urgency="high",
+            budget_band="high",
+            name="Olivia Hart",
+            email="olivia.hart@example.com",
+            phone="+61 412 555 018",
+            country="Australia",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+        assert result.fabricated_fields == []
+
+    def test_olivia_hart_urgency_contradiction_is_discarded(self) -> None:
+        """Example C: urgency 'high' is contradicted because the enquiry
+        says 'please call me urgently' -- the justification quotes a
+        known high-urgency signal for the exact value it disputes."""
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency"],
+            reason=(
+                'urgency "high" is contradicted because the enquiry says '
+                '"please call me urgently."'
+            ),
+        )
+        result = self._verify(
+            "I want to buy a premium Scotch whisky cask portfolio around "
+            "AUD 120,000 this month — please call me urgently.",
+            decision,
+            urgency="high",
+            budget_band="high",
+            name="Olivia Hart",
+            email="olivia.hart@example.com",
+            phone="+61 412 555 018",
+            country="Australia",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+        assert result.fabricated_fields == []
+
+    def test_olivia_hart_both_fields_contradicted_still_passes(self) -> None:
+        """Both Example A and Example C reported on the same enquiry."""
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["budget_band", "urgency"],
+            reason=(
+                'budget_band "high" is CONTRADICTED because AUD 120,000 clearly '
+                'falls into the high category. urgency "high" is contradicted '
+                'because the enquiry says "please call me urgently."'
+            ),
+        )
+        result = self._verify(
+            "I want to buy a premium Scotch whisky cask portfolio around "
+            "AUD 120,000 this month — please call me urgently.",
+            decision,
+            urgency="high",
+            budget_band="high",
+            name="Olivia Hart",
+            email="olivia.hart@example.com",
+            phone="+61 412 555 018",
+            country="Australia",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+        assert result.fabricated_fields == []
+
+    def test_e01_no_rush_at_all_self_contradiction_discarded(self) -> None:
+        """Example B: urgency 'low' is supported by 'No rush at all' but is
+        fabricated -- explicit affirm-then-fabricate contradiction."""
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency"],
+            reason='urgency "low" is supported by "No rush at all" but is fabricated.',
+        )
+        result = self._verify(
+            "Just browsing — maybe a small cask under £5,000 someday. No rush at all.",
+            decision,
+            urgency="low",
+            budget_band="low",
+            name="Priya Nair",
+            email="priya.nair@example.co.uk",
+            phone=None,
+            country="United Kingdom",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+        assert result.fabricated_fields == []
+
+    def test_e02_next_few_months_not_urgent_self_contradiction_discarded(self) -> None:
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency"],
+            reason=(
+                'urgency "low" is supported by "not urgent" but flagged as '
+                "fabricated since medium also seemed plausible."
+            ),
+        )
+        result = self._verify(
+            "Hi — I'm Noah Berger from Toronto, Canada. "
+            "Contact: noah.berger@example.ca / +1 416 555 7721.\n\n"
+            "Interested in a mid-range cask, roughly CAD 25–40k, "
+            "sometime in the next few months (not urgent).\n\nThanks",
+            decision,
+            urgency="low",
+            budget_band="medium",
+            name="Noah Berger",
+            email="noah.berger@example.ca",
+            phone="+1 416 555 7721",
+            country="Canada",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+        assert result.fabricated_fields == []
+
+    def test_e10_not_urgent_self_contradiction_discarded(self) -> None:
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency"],
+            reason='urgency "low" is supported by "Not urgent" yet listed as fabricated.',
+        )
+        result = self._verify(
+            "Hi, I'm Daniel Okonkwo calling from Lagos. My phone is "
+            "+234 801 555 0199. I am interested in a medium-budget whisky "
+            "cask, no email address — please use SMS only. Not urgent.",
+            decision,
+            urgency="low",
+            budget_band="medium",
+            name="Daniel Okonkwo",
+            email="unused@example.com",
+            phone="+234 801 555 0199",
+            country="Nigeria",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+        assert result.fabricated_fields == []
+
+    def test_genuine_fabrication_is_still_caught_when_not_self_contradictory(self) -> None:
+        """Sanity control: an ordinary, non-contradictory fabrication claim
+        (no affirming language, no restated value/signal) must still fail --
+        the validator must not blanket-clear every claim."""
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["email"],
+            reason="email does not appear anywhere in the enquiry text.",
+        )
+        result = self._verify(
+            "Interested in a whisky cask, no contact details given.",
+            decision,
+            urgency="unknown",
+            budget_band="unknown",
+            email="fabricated@example.com",
+        )
+        assert result.passed is False
+        assert result.fabrication_detected is True
+        assert "email" in result.fabricated_fields
+
+    def test_deterministic_derived_mismatch_still_fails_after_consistency_clear(self) -> None:
+        """A self-contradictory extracted-field claim gets cleared, but a
+        genuine deterministic tool-derived mismatch present in the same run
+        must still fail the run."""
+        record, trace, tools = self._record_and_trace(
+            urgency="low",
+            budget_band="low",
+            name="Priya Nair",
+            email="priya.nair@example.co.uk",
+            phone=None,
+            country="United Kingdom",
+        )
+        record["score"] = 999  # deliberately wrong vs. score_lead tool output
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency"],
+            reason='urgency "low" is supported by "No rush at all" but is fabricated.',
+        )
+        adapter = FakeAdapter([_response_for(decision)])
+        result = verify(
+            "No rush at all, just browsing.", _plan(*tools), trace, record, adapter
+        )
+        assert result.passed is False
+        assert result.fabrication_detected is True
+        assert "score" in result.fabricated_fields
+        assert "urgency" not in result.fabricated_fields
+
+
+class TestExtractedContradictionGateArchitecture:
+    """Architectural fix: structured verdicts + deterministic closed-enum
+    support. A Verifier LLM that 'changes its mind' and lists a supported
+    enum as fabricated must never quarantine the run.
+    """
+
+    def _verify_hostile(
+        self,
+        enquiry: str,
+        *,
+        urgency: str,
+        budget_band: str,
+        hostile_fields: list[str],
+        hostile_reason: str,
+        verdicts: list[ExtractedFieldVerdict] | None = None,
+        name: str = "Test Lead",
+        email: str | None = "test@example.com",
+        phone: str | None = "+1 555 000 0000",
+        country: str = "United Kingdom",
+    ) -> VerifierDecision:
+        parse = {
+            "name": name,
+            "email": email,
+            "phone": phone,
+            "country": country,
+            "budget_band": budget_band,
+            "asset_interest": "whisky casks",
+            "urgency": urgency,
+        }
+        record = {
+            "extracted": dict(parse),
+            "jurisdiction_rule": dict(LOOKUP_RESULT),
+            "score": 55,
+            "score_breakdown": {"budget": 25, "urgency": 15, "jurisdiction_risk": 15},
+            "dedupe_hash": compute_dedupe_hash(parse["email"], parse["phone"]),
+        }
+        tools = (
+            ToolName.PARSE_ENQUIRY,
+            ToolName.LOOKUP_JURISDICTION_RULE,
+            ToolName.SCORE_LEAD,
+        )
+        trace = _trace(
+            *tools,
+            results={
+                ToolName.PARSE_ENQUIRY: parse,
+                ToolName.LOOKUP_JURISDICTION_RULE: LOOKUP_RESULT,
+                ToolName.SCORE_LEAD: {
+                    "score": record["score"],
+                    "breakdown": record["score_breakdown"],
+                },
+            },
+        )
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=list(hostile_fields),
+            extracted_field_verdicts=verdicts or [],
+            reason=hostile_reason,
+        )
+        adapter = FakeAdapter([_response_for(decision)])
+        return verify(enquiry, _plan(*tools), trace, record, adapter)
+
+    # --- Explicit regression phrases (must never fail again) ---------------
+
+    def test_under_5k_low_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "Just browsing — maybe a small cask under £5,000 someday. No rush at all.",
+            urgency="low",
+            budget_band="low",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="budget_band low and urgency low are fabricated",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+
+    def test_no_rush_low_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "Interested in a cask. No rush.",
+            urgency="low",
+            budget_band="unknown",
+            hostile_fields=["urgency"],
+            hostile_reason='urgency "low" is supported by "No rush" therefore fabricated.',
+            verdicts=[
+                ExtractedFieldVerdict(
+                    field="urgency",
+                    label=ExtractedFieldLabel.CONTRADICTED,
+                    note="prefers medium",
+                )
+            ],
+        )
+        assert result.passed is True
+        assert "urgency" not in result.fabricated_fields
+
+    def test_not_urgent_low_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "Medium-budget whisky cask. Not urgent.",
+            urgency="low",
+            budget_band="medium",
+            hostile_fields=["urgency"],
+            hostile_reason="urgency low is fabricated",
+        )
+        assert result.passed is True
+
+    def test_just_browsing_low_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "just browsing for now",
+            urgency="low",
+            budget_band="unknown",
+            hostile_fields=["urgency"],
+            hostile_reason="fabricated urgency",
+        )
+        assert result.passed is True
+
+    def test_this_month_high_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "Ready to buy this month.",
+            urgency="high",
+            budget_band="unknown",
+            hostile_fields=["urgency"],
+            hostile_reason="urgency high contradicted",
+        )
+        assert result.passed is True
+
+    def test_urgently_high_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "Please call me urgently this month.",
+            urgency="high",
+            budget_band="high",
+            hostile_fields=["urgency"],
+            hostile_reason=(
+                'urgency "high" is contradicted because the enquiry says '
+                '"please call me urgently."'
+            ),
+        )
+        assert result.passed is True
+
+    def test_aud_120k_high_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "around AUD 120,000 for a premium portfolio",
+            urgency="unknown",
+            budget_band="high",
+            hostile_fields=["budget_band"],
+            hostile_reason=(
+                'budget_band "high" is CONTRADICTED because AUD120k is high'
+            ),
+            verdicts=[
+                ExtractedFieldVerdict(
+                    field="budget_band",
+                    label=ExtractedFieldLabel.CONTRADICTED,
+                    note="AUD120k is high",
+                )
+            ],
+            name="Olivia Hart",
+            email="olivia.hart@example.com",
+            phone="+61 412 555 018",
+            country="Australia",
+        )
+        assert result.passed is True
+        assert result.fabricated_fields == []
+
+    def test_95k_high_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "approximately £95,000 into a cask allocation within 30 days.",
+            urgency="high",
+            budget_band="high",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="both fabricated",
+        )
+        assert result.passed is True
+
+    def test_next_few_months_not_urgent_low_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "CAD 25–40k, sometime in the next few months (not urgent).",
+            urgency="low",
+            budget_band="medium",
+            hostile_fields=["urgency"],
+            hostile_reason="prefer medium; low fabricated",
+            verdicts=[
+                ExtractedFieldVerdict(
+                    field="urgency",
+                    label=ExtractedFieldLabel.CONTRADICTED,
+                    note="should be medium",
+                )
+            ],
+        )
+        assert result.passed is True
+
+    def test_within_30_days_medium_never_quarantined(self) -> None:
+        result = self._verify_hostile(
+            "I'd like to place funds within 30 days.",
+            urgency="medium",
+            budget_band="unknown",
+            hostile_fields=["urgency"],
+            hostile_reason="should have been high",
+        )
+        assert result.passed is True
+
+    # --- Manual E01–E14 shapes: hostile verifier cannot quarantine ---------
+
+    def test_e01_olivia_hart_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hello,\n\nMy name is Olivia Hart. Email olivia.hart@example.com, "
+            "phone +61 412 555 018. I am based in Australia.\n\n"
+            "I want to buy a premium Scotch whisky cask portfolio around "
+            "AUD 120,000 this month — please call me urgently.\n\nRegards,\nOlivia"
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="high",
+            budget_band="high",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason=(
+                'budget_band "high" is CONTRADICTED because AUD 120,000 clearly '
+                'falls into the high category. urgency "high" is contradicted '
+                'because the enquiry says "please call me urgently."'
+            ),
+            name="Olivia Hart",
+            email="olivia.hart@example.com",
+            phone="+61 412 555 018",
+            country="Australia",
+        )
+        assert result.passed is True
+        assert result.fabrication_detected is False
+
+    def test_e02_noah_berger_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hi — I'm Noah Berger from Toronto, Canada. Contact: "
+            "noah.berger@example.ca / +1 416 555 7721.\n\n"
+            "Interested in a mid-range cask, roughly CAD 25–40k, sometime in "
+            "the next few months (not urgent).\n\nThanks"
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="low",
+            budget_band="medium",
+            hostile_fields=["urgency", "budget_band"],
+            hostile_reason="prefer different bands",
+            name="Noah Berger",
+            email="noah.berger@example.ca",
+            phone="+1 416 555 7721",
+            country="Canada",
+        )
+        assert result.passed is True
+
+    def test_e03_priya_nair_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hello, I'm Priya Nair in the United Kingdom. "
+            "priya.nair@example.co.uk, +44 7700 900123.\n\n"
+            "Just browsing — maybe a small cask under £5,000 someday. "
+            "No rush at all.\n\nCheers"
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="low",
+            budget_band="low",
+            hostile_fields=["urgency", "budget_band"],
+            hostile_reason="low is supported therefore fabricated",
+            name="Priya Nair",
+            email="priya.nair@example.co.uk",
+            phone="+44 7700 900123",
+            country="United Kingdom",
+        )
+        assert result.passed is True
+
+    def test_e04_marcus_webb_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "G'day, Marcus Webb here in Melbourne, Australia. "
+            "marcus.webb@example.com.au / +61 398 555 441.\n"
+            "Looking at a single cask around AUD 55k over the next quarter."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="medium",
+            budget_band="medium",
+            hostile_fields=["urgency", "budget_band"],
+            hostile_reason="reclassified",
+            name="Marcus Webb",
+            email="marcus.webb@example.com.au",
+            phone="+61 398 555 441",
+            country="Australia",
+        )
+        assert result.passed is True
+
+    def test_e05_sophie_tremblay_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Bonjour, Sophie Tremblay, Montreal, Canada. "
+            "sophie.tremblay@example.ca, +1 514 555 0199.\n"
+            "Interested in investing about CAD 80,000 in bonded Scotch casks soon."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="medium",
+            budget_band="high",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="CAD 80k should not be high",
+            name="Sophie Tremblay",
+            email="sophie.tremblay@example.ca",
+            phone="+1 514 555 0199",
+            country="Canada",
+        )
+        assert result.passed is True
+
+    def test_e06_james_whitfield_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Dear team, James Whitfield, London, United Kingdom. "
+            "james.whitfield@example.co.uk / +44 20 7946 0958.\n"
+            "I'd like to place approximately £95,000 into a cask allocation "
+            "within 30 days."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="high",
+            budget_band="high",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="95k is medium; within 30 days is medium",
+            name="James Whitfield",
+            email="james.whitfield@example.co.uk",
+            phone="+44 20 7946 0958",
+            country="United Kingdom",
+        )
+        assert result.passed is True
+
+    def test_e06_medium_for_95k_still_fails_via_deterministic_gate(self) -> None:
+        """Real band contradiction must still quarantine (not preference)."""
+        enquiry = (
+            "I'd like to place approximately £95,000 into a cask allocation "
+            "within 30 days."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="high",
+            budget_band="medium",  # wrong band
+            hostile_fields=[],  # LLM missed it — gate must add
+            hostile_reason="looks fine",
+            name="James Whitfield",
+            email="james.whitfield@example.co.uk",
+            phone="+44 20 7946 0958",
+            country="United Kingdom",
+        )
+        assert result.passed is False
+        assert result.fabrication_detected is True
+        assert "budget_band" in result.fabricated_fields
+
+    def test_e07_ava_chen_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hi, I'm Ava Chen in New York, United States. ava.chen@example.com, "
+            "+1 212 555 0144.\nReady to allocate USD 150,000 to whisky casks "
+            "this week — please expedite."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="high",
+            budget_band="high",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="fabricated",
+            name="Ava Chen",
+            email="ava.chen@example.com",
+            phone="+1 212 555 0144",
+            country="United States",
+        )
+        assert result.passed is True
+
+    def test_e08_duplicate_contacts_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hello again — Olivia Hart, olivia.hart@example.com, +61 412 555 018, "
+            "Australia. Still interested in the AUD 120k cask portfolio, urgent."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="high",
+            budget_band="high",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="self-contradictory reclassification",
+            name="Olivia Hart",
+            email="olivia.hart@example.com",
+            phone="+61 412 555 018",
+            country="Australia",
+        )
+        assert result.passed is True
+
+    def test_e10_daniel_okonkwo_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hi, I'm Daniel Okonkwo calling from Lagos. My phone is "
+            "+234 801 555 0199. I am interested in a medium-budget whisky cask, "
+            "no email address — please use SMS only. Not urgent."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="low",
+            budget_band="medium",
+            hostile_fields=["urgency"],
+            hostile_reason='urgency "low" is supported by "Not urgent" but fabricated',
+            name="Daniel Okonkwo",
+            email=None,
+            phone="+234 801 555 0199",
+            country="Nigeria",
+        )
+        assert result.passed is True
+
+    def test_e11_lena_ortiz_hostile_verifier_passes(self) -> None:
+        enquiry = (
+            "Hi, Lena Ortiz, lena.ortiz@example.com, +34 612 555 010, Spain.\n"
+            "Looking at roughly AUD 55k for one cask over the next quarter."
+        )
+        result = self._verify_hostile(
+            enquiry,
+            urgency="medium",
+            budget_band="medium",
+            hostile_fields=["budget_band", "urgency"],
+            hostile_reason="prefer high",
+            name="Lena Ortiz",
+            email="lena.ortiz@example.com",
+            phone="+34 612 555 010",
+            country="Spain",
+        )
+        assert result.passed is True
+
+    def test_gate_keeps_free_text_email_fabrication(self) -> None:
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["email"],
+            reason="email not in enquiry",
+            extracted_field_verdicts=[
+                ExtractedFieldVerdict(
+                    field="email",
+                    label=ExtractedFieldLabel.CONTRADICTED,
+                    note="not present",
+                )
+            ],
+        )
+        cleaned, _ = _apply_extracted_contradiction_gate(
+            decision,
+            enquiry_text="Interested in casks, no contact details.",
+            final_record={"extracted": {"email": "forged@example.com", "urgency": "unknown", "budget_band": "unknown"}},
+        )
+        assert "email" in cleaned.fabricated_fields
+
+    def test_supported_structured_verdict_clears_fabricated_list(self) -> None:
+        decision = _passing_decision(
+            passed=False,
+            fabrication_detected=True,
+            fabricated_fields=["urgency"],
+            reason="whatever",
+            extracted_field_verdicts=[
+                ExtractedFieldVerdict(
+                    field="urgency",
+                    label=ExtractedFieldLabel.SUPPORTED,
+                    note="No rush at all",
+                )
+            ],
+        )
+        cleaned, warnings = _apply_extracted_contradiction_gate(
+            decision,
+            enquiry_text="No rush at all.",
+            final_record={"extracted": {"urgency": "low", "budget_band": "unknown"}},
+        )
+        assert cleaned.fabricated_fields == []
+        assert cleaned.passed is True
+        assert any("urgency" in w for w in warnings)

@@ -10,15 +10,15 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# USD per 1,000 tokens. TODO(llm/pricing): fill in real, current prices for
-# whichever models are actually used before running the evaluation harness —
-# empty for now (no concrete adapter/model is chosen yet, see llm/factory.py),
-# which is a real, honestly-reported gap: every remote model call currently
-# falls through to the "unrecognized model" branch below and reports
-# cost_usd=0.0 rather than a guessed number.
+# USD per 1,000 tokens. Sourced from OpenRouter's public pricing page for the
+# default trial model (`openai/gpt-4o-mini`); update if MODEL_NAME changes.
+# Keys accept both the OpenRouter model id and the bare provider model name
+# because OpenRouter's response `model` field can return either shape.
+# Unknown models still fall through to the honest 0.0 + warning path below
+# rather than fabricating a price.
 PRICING_PER_1K_TOKENS: dict[str, dict[str, float]] = {
-    # "gpt-4o-mini": {"prompt": 0.0, "completion": 0.0},
-    # "claude-3-5-haiku": {"prompt": 0.0, "completion": 0.0},
+    "openai/gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
+    "gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
 }
 
 # Local models (e.g. via Ollama) have no per-token API cost.

@@ -26,12 +26,9 @@ current, committed contracts (docs/contracts.md) makes them measurable yet:
   whether an LLM call's *first* attempt failed schema validation before an
   internal retry recovered it. `ModelAdapter.complete_structured()`'s own
   contract (docs/contracts.md section 5) says this retry happens internally
-  and opaquely; the interface has no field surfacing it, and no concrete
-  adapter exists yet regardless (`llm/factory.py` raises
-  `NotImplementedError` for every provider). Making this genuinely
-  measurable would mean extending a documented, immutable contract
-  (`StructuredCompletionResponse`) -- explicitly out of scope for "implement
-  ONLY the Evaluation Harness".
+  and opaquely; the interface has no field surfacing it. Making this
+  genuinely measurable would mean extending a documented, immutable contract
+  (`StructuredCompletionResponse`).
 
 Reporting `None` with a stated reason is preferred over a fabricated number,
 per this project's established honesty policy (docs/architecture.md
@@ -58,12 +55,11 @@ _HONESTY_NOTES: tuple[str, ...] = (
     "ModelAdapter.complete_structured() retries a schema-invalid first "
     "attempt internally and opaquely per its own contract (docs/contracts.md "
     "section 5); no field on StructuredCompletionResponse currently surfaces "
-    "whether that happened, and no concrete adapter exists yet regardless "
-    "(llm/factory.py). Extending that contract is out of scope for "
-    "'implement ONLY the Evaluation Harness' -- named here rather than "
-    "guessed at, per docs/architecture.md section 15's honesty policy.",
-    "repair_success_rate is None whenever repair_attempted_rate is 0.0: the "
-    "Repair Loop is not implemented yet, so no run has repair_attempted=True.",
+    "whether that happened. Extending that contract would be a deliberate "
+    "contracts.md change -- named here rather than guessed at, per "
+    "docs/architecture.md section 15's honesty policy.",
+    "repair_success_rate is None whenever repair_attempted_rate is 0.0 "
+    "(no verifier failures triggered the Repair Loop in this batch).",
 )
 
 

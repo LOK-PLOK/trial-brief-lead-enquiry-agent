@@ -262,7 +262,9 @@ Plan: { steps: PlanStep[] }
 - Deterministic Python control flow — **not an LLM call**. Iterates `Plan.steps` in order.
 - For each step: look up the tool by its (enum-constrained) name in the Tool Registry → validate `args` against *that tool's own* Pydantic arg schema (catches planner-hallucinated args before real execution, distinct from the Plan's own schema check) → invoke the tool as a real Python function call → record `{step, tool, args, result|error, status, latency_ms}` into the trace.
 - This is the concrete meaning of "real tool calling, not string parsing of model prose": the Planner's structured JSON *is* the tool-call specification (analogous to a function-call response), and the Executor maps it to code via direct field access and dictionary dispatch — never by regexing free-form model text.
-- On any tool failure (including `write_record` duplicate rejection), the executor **stops and reports the failure upward** rather than continuing blindly, feeding into the Repair Loop.
+- On any tool failure, the executor **stops and reports the failure upward** rather than continuing blindly.
+- The Executor assembles a pre-persist `LeadRecord` from `parse_enquiry` + `lookup_jurisdiction_rule` + `score_lead`. `dedupe_hash` is computed from extracted contacts (same algorithm as `write_record`) so the Verifier can judge the record **before** any lead row exists.
+- `write_record` is **not** an Executor plan step in the verified path: the Orchestrator strips it from plans before execution and runs it only after Verifier pass (§10).
 - Because the executor's control flow is literally "iterate `plan.steps`", it cannot itself skip/reorder/substitute a step — any deviation the Verifier finds must originate from a planner-level compromise (e.g., prompt injection) or an executor bug, which is exactly why the Verifier checks trace-vs-plan independently.
 
 ---
@@ -276,7 +278,7 @@ Common `Tool` interface: `name`, `description`, `args_schema` (Pydantic), `resul
 | `parse_enquiry` | LLM-backed | Own dedicated prompt (`prompts/parse_enquiry_prompt.py`), calls the adapter with an `ExtractedFields` schema; distinct prompt/call from planner and verifier |
 | `lookup_jurisdiction_rule` | Deterministic | Dict lookup against `data/jurisdiction_rules.json`; unknown country → explicit fallback rule, logged as a warning, never fabricated |
 | `score_lead` | Deterministic | Pure function over extracted fields + jurisdiction rule; unit-testable with fixed inputs |
-| `write_record` | Deterministic | Normalizes email (lowercase/trim) and phone (digits-only), SHA-256 hash, checks `leads.dedupe_hash` uniqueness before insert |
+| `write_record` | Deterministic | **Post-verifier only.** Normalizes email (lowercase/trim) and phone (digits-only), SHA-256 hash, checks `leads.dedupe_hash` uniqueness before insert. Invoked by the Orchestrator after Verifier pass — never by Repair, never before the gate |
 
 All four are independently unit-testable: the three deterministic tools with plain fixed-input tests, `parse_enquiry` with a mocked adapter returning canned structured responses.
 
@@ -285,19 +287,28 @@ All four are independently unit-testable: the three deterministic tools with pla
 ## 9. Verifier Architecture
 
 - Fully separate module (`agent/verifier.py`) and separate prompt file, **no shared context, message history, or text with the planner/extractor prompts** — each adapter call is stateless.
-- Inputs: original `enquiry_text`, the executed `Plan`, the full `tool_call_trace`, and the `final_record`. It deliberately does **not** receive the planner's/extractor's rationale beyond what's already in the Plan/trace, forcing it to re-derive judgments from primary evidence.
+- Inputs: original `enquiry_text`, the executed `Plan` (pre-persist tools only; **step `args` are redacted before the Verifier LLM prompt** because they are non-authoritative planner placeholders), the Executor `tool_call_trace`, and the pre-persist `final_record`. Authoritative fabrication evidence is enquiry text + successful tool outputs (including `parse_enquiry`) + `final_record` — never planner placeholders.
+- The Verifier is the **true gate before lead persistence**: no `leads` row is inserted until it passes (or repair re-verify passes).
 - Output schema (illustrative):
 
 ```
 VerifierDecision: {
   pass: bool, confidence: float,
   fabrication_detected: bool, fabricated_fields: str[],
+  extracted_field_verdicts: [{field, label: SUPPORTED|CONTRADICTED|INSUFFICIENT_EVIDENCE, note}],
   plan_deviation_detected: bool, deviation_details: str | null,
   reason: str   # required, non-empty on fail
 }
 ```
 
-- Checks two failure classes explicitly per the brief: (1) any `final_record` field not present/inferable in `enquiry_text` → fabrication; (2) any skip/reorder/substitution between `Plan` and `tool_call_trace` → plan deviation.
+- Checks two failure classes explicitly per the brief:
+  1. **Fabrication** — evaluated using **both** the enquiry text and the executed tool outputs, split by field type:
+     - **Extracted fields** (`name`, `email`, `phone`, `country`, `budget_band`, `asset_interest`, `urgency`) are judged against the **enquiry text**; the successful `parse_enquiry` result is the authoritative extracted payload (`final_record.extracted` must match it — deterministic assembly check). Planner placeholder args are never evidence.
+     - **Closed enums (`budget_band`, `urgency`)** use a **contradiction gate** (not a second extractor): the LLM returns structured `extracted_field_verdicts`; `agent/extracted_support.py` independently classifies whether the *chosen* value is SUPPORTED / CONTRADICTED / INSUFFICIENT_EVIDENCE from the enquiry. Only CONTRADICTED may enter `fabricated_fields`. SUPPORTED and INSUFFICIENT_EVIDENCE never quarantine. Deterministic SUPPORTED wins over an LLM CONTRADICTED (fail-open toward accepting a supported extraction). Re-running `parse_enquiry` inside the Verifier was evaluated and rejected as the primary fix — a second LLM extraction is still non-deterministic and answers “what would I extract?” rather than “is this value supported?”.
+     - **Tool-derived fields** (`jurisdiction_rule` / `handling_note` / `requires_disclaimer`, `score` / `score_breakdown`) must match **successful tool outputs in the tool_call_trace**, unchanged. A derived value is **not** fabrication merely because it is absent from the enquiry. It **is** fabrication if it differs from the successful tool result (or has no supporting successful tool result).
+     - **Deterministically computed fields** (currently `dedupe_hash`) are validated by recomputing `compute_dedupe_hash(extracted.email, extracted.phone)` (or matching a successful `write_record` result when present in the trace).
+     - After the LLM returns, `verifier.py` **gates then reconciles**: contradiction gate first (extracted); then if deterministic comparison proves tool-derived / computed fields match, any LLM fabrication claims on those fields are **removed**. Parse-vs-final extracted mismatches are added. If no fabricated fields remain and there is no plan deviation, `fabrication_detected=false` and the decision may pass.
+  2. **Plan deviation** — any skip/reorder/substitution between `Plan` and `tool_call_trace` (tools/order only; plan args are irrelevant).
 - Config allows an independent `VERIFIER_MODEL` (can differ from `PLANNER_MODEL`/`EXTRACTOR_MODEL` even on the same provider) to reduce shared-blind-spot risk — flagged honestly in §15 as a partial mitigation, not a full solution.
 
 ---
@@ -310,29 +321,36 @@ sequenceDiagram
     participant P as Planner
     participant E as Executor
     participant V as Verifier
+    participant W as write_record
     participant DB as SQLite
 
     O->>V: verify(enquiry, plan, trace, record)
     V-->>O: fail (fabrication_detected=true)
     O->>O: select repair strategy = re-extract
-    O->>E: re-run parse_enquiry with verifier reason appended
-    E-->>O: new trace + record
+    Note over O,E: Repair never calls write_record
+    O->>E: re-run failed stages only (parse / from failed step / replan)
+    E-->>O: new trace + record (pre-persist)
     O->>V: verify again (independent, fresh call)
     alt repair succeeds
         V-->>O: pass
+        O->>W: write_record once
+        W-->>O: lead_id + dedupe_hash
         O->>DB: final_status=completed, repair_succeeded=true
     else repair still fails
         V-->>O: fail
+        Note over O,DB: No lead insert on quarantine
         O->>DB: final_status=quarantined, repair_succeeded=false, reason stored
     end
 ```
 
 - Exactly one repair attempt, strategy chosen by failure class:
-  - `plan_deviation_detected` → re-run Executor strictly against the original Plan (fix is procedural), or ask Planner to re-plan if the deviation was caused by a genuine tool error.
-  - `fabrication_detected` → re-run `parse_enquiry` with the verifier's flagged fields injected into the prompt and an explicit "leave unknown fields null, do not guess" instruction.
-  - Tool execution error → retry from the failed step, or request a corrected plan.
+  - `plan_deviation_detected` → `reexecute`: retry from the failed step when the prior trace stopped on an error (reuse earlier successes); otherwise full re-run of the **pre-persist** plan. Never includes `write_record`.
+  - `fabrication_detected` → `reextract`: re-run `parse_enquiry` with the verifier's flagged fields injected into the prompt and an explicit "leave unknown fields null, do not guess" instruction, then re-run downstream deterministic tools.
+  - otherwise → `replan`: corrected plan (stripped of `write_record`), then execute.
 - Re-verification after repair is a **fresh, independent Verifier call** — never a self-check.
-- Outcome always persisted: `completed` or `quarantined` with reason — never silently dropped.
+- On Verifier/repair pass, the Orchestrator runs **`write_record` exactly once**, appending it to the tool-call trace for observability. Exactly one lead row per accepted enquiry.
+- Quarantined / failed-verify paths **never** insert a lead.
+- Outcome always persisted on the `runs` row: `completed`, `quarantined`, or `error` — never silently dropped.
 
 ---
 
@@ -381,20 +399,23 @@ sequenceDiagram
     participant Ex as Executor
     participant T as Tools
     participant V as Verifier
+    participant W as write_record
     participant DB
 
     UI->>API: POST /api/runs {enquiry_text}
     API->>Pl: build_plan(enquiry_text, tool_manifest)
-    Pl-->>API: Plan (validated)
+    Pl-->>API: Plan (validated; write_record stripped)
     API->>Ex: run_plan(plan, enquiry_text)
-    loop each PlanStep
+    loop each pre-persist PlanStep
         Ex->>T: invoke(tool, args)
         T-->>Ex: ToolResult
     end
-    Ex-->>API: trace + final_record
+    Ex-->>API: trace + final_record (dedupe_hash computed, no DB insert)
     API->>V: verify(enquiry_text, plan, trace, record)
     V-->>API: pass, confidence, reason
-    API->>DB: persist run
+    API->>W: write_record once (post-verify gate)
+    W-->>API: lead_id + dedupe_hash
+    API->>DB: persist run (+ lead already written)
     API-->>UI: RunResult
 ```
 

@@ -55,6 +55,11 @@ class RunResult(BaseModel):
 
     final_status: str = "error"  # "completed" | "quarantined" | "error"
 
+    # Stage / harness failure details (null on successful completed runs).
+    error_type: str | None = None
+    error_message: str | None = None
+    traceback: str | None = None
+
     llm_calls: list[LlmCallUsage] = []
     total_tokens: int = 0
     total_cost_usd: float = 0.0

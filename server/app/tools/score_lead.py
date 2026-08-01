@@ -1,17 +1,60 @@
 """`score_lead`: deterministic scoring function over the extracted fields.
 See docs/architecture.md section 8.
 
-Pure function — no LLM call, no I/O. Should be the easiest tool to
-unit-test exhaustively.
+Pure function — no LLM call, no I/O — so any run-to-run variance the
+evaluation harness measures on identical input (docs/architecture.md
+section 11) can never be attributed to this tool.
+
+Scoring rules (fully documented here, not just in code comments, since this
+is a fictional business rule this trial invented rather than a real
+underwriting model):
+
+- `budget` (0-40 points): the enquirer's stated/inferred budget band.
+    high -> 40, medium -> 25, low -> 10, unknown -> 0.
+- `urgency` (0-30 points): how time-sensitive the enquiry reads.
+    high -> 30, medium -> 15, low -> 5, unknown -> 0.
+- `jurisdiction_risk` (0-20 points): how favorable the enquirer's
+  jurisdiction is for processing this lead without extra compliance
+  overhead (higher is better -- a *low*-risk jurisdiction earns more
+  points, despite sharing its key name with the Executor's canonical
+  `final_record` field, docs/contracts.md section 2's `ExecutionResult`
+  example).
+    restricted -> 0 (flagged for manual compliance review; contributes
+      nothing positive to the score).
+    not restricted, disclaimer required -> 15 (the common case).
+    not restricted, no disclaimer required -> 20 (the most favorable case).
+
+`score` is the plain sum of the three components above (maximum 90); no
+other weighting, adjustment, or randomness is applied.
 """
 
 from __future__ import annotations
 
+import time
+
 from pydantic import BaseModel
 
-from app.schemas.extraction import ExtractedFields
+from app.schemas.extraction import BudgetBand, ExtractedFields, Urgency
 from app.tools.base import Tool, ToolResult
 from app.tools.lookup_jurisdiction_rule import JurisdictionRule
+
+_BUDGET_POINTS: dict[BudgetBand, int] = {
+    BudgetBand.HIGH: 40,
+    BudgetBand.MEDIUM: 25,
+    BudgetBand.LOW: 10,
+    BudgetBand.UNKNOWN: 0,
+}
+
+_URGENCY_POINTS: dict[Urgency, int] = {
+    Urgency.HIGH: 30,
+    Urgency.MEDIUM: 15,
+    Urgency.LOW: 5,
+    Urgency.UNKNOWN: 0,
+}
+
+_JURISDICTION_RISK_RESTRICTED = 0
+_JURISDICTION_RISK_WITH_DISCLAIMER = 15
+_JURISDICTION_RISK_NO_DISCLAIMER = 20
 
 
 class ScoreLeadArgs(BaseModel):
@@ -32,11 +75,26 @@ class ScoreLeadTool(Tool):
 
     def run(self, args: ScoreLeadArgs) -> ToolResult:
         """`args` is already validated against `ScoreLeadArgs` by
-        `Tool.execute()` — this only needs to compute the score.
+        `Tool.execute()` -- this only needs to compute the score, per the
+        module docstring's fully documented, pure, deterministic rules."""
+        started = time.perf_counter()
+        breakdown = {
+            "budget": _BUDGET_POINTS[args.extracted.budget_band],
+            "urgency": _URGENCY_POINTS[args.extracted.urgency],
+            "jurisdiction_risk": _jurisdiction_risk_points(args.jurisdiction_rule),
+        }
+        result = ScoreLeadResult(score=sum(breakdown.values()), breakdown=breakdown)
+        return ToolResult(
+            success=True,
+            data=result.model_dump(mode="json"),
+            error=None,
+            latency_ms=(time.perf_counter() - started) * 1000,
+        )
 
-        TODO(tools/score_lead): implement a pure, deterministic weighted
-        score (e.g. budget_band weight + urgency weight +/- jurisdiction risk
-        adjustment). Must be a pure function of `args` — no randomness, no
-        LLM calls — so run-to-run variance in the harness (section 11)
-        cannot be attributed to this tool."""
-        raise NotImplementedError
+
+def _jurisdiction_risk_points(rule: JurisdictionRule) -> int:
+    if rule.restricted:
+        return _JURISDICTION_RISK_RESTRICTED
+    if rule.requires_disclaimer:
+        return _JURISDICTION_RISK_WITH_DISCLAIMER
+    return _JURISDICTION_RISK_NO_DISCLAIMER

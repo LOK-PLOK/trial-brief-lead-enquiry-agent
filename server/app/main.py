@@ -9,13 +9,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import routes_harness, routes_health, routes_leads, routes_runs
 from app.core.config import get_settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger, run_id_ctx
 from app.db.session import init_db
+
+logger = get_logger(__name__)
 
 # Populated by the Docker build's client stage (see root Dockerfile); absent
 # in local `uvicorn --reload` dev, where the Vite dev server is used instead.
@@ -39,6 +42,27 @@ def create_app() -> FastAPI:
     app.include_router(routes_runs.router)
     app.include_router(routes_leads.router)
     app.include_router(routes_harness.router)
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Last-resort net: docs/contracts.md section 7's failure-mode table
+        requires domain errors to reach the client as "structured JSON error
+        bodies ... never a bare unhandled 500". `Pipeline.run()` itself
+        already never raises (its own contract), so in practice this only
+        ever fires for something outside the pipeline proper -- e.g. the
+        `get_adapter()` dependency raising because `OPENROUTER_API_KEY`
+        isn't configured -- but the contract is about the HTTP boundary, not
+        about which layer happens to raise."""
+        logger.error(
+            "unhandled exception reached the API boundary",
+            exc_info=True,
+            extra={
+                "event": "unhandled_exception",
+                "path": request.url.path,
+                "run_id": run_id_ctx.get(),
+            },
+        )
+        return JSONResponse(status_code=500, content={"detail": str(exc) or exc.__class__.__name__})
 
     if _STATIC_DIR.is_dir():
         # `html=True` serves index.html for unmatched paths, which is what a

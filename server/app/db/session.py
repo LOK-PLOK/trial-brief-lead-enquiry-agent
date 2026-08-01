@@ -72,11 +72,33 @@ def init_db() -> None:
 
     No migration tool is used for this trial (see scaffold review: Alembic
     was removed as unnecessary for a single-environment 3-day assessment with
-    no production schema history to preserve). If the schema needs to evolve
-    against a database that already has data, replace this with a real
-    migration tool rather than editing models.py in place.
+    no production schema history to preserve). Additive nullable columns are
+    applied via `_ensure_sqlite_columns` so existing local DBs pick up new
+    observability fields without a full reset.
     """
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _ensure_sqlite_columns(engine)
+
+
+def _ensure_sqlite_columns(engine: Engine) -> None:
+    """Add newly introduced nullable columns to existing SQLite tables."""
+    if engine.dialect.name != "sqlite":
+        return
+    additions = (
+        ("runs", "error_type", "TEXT"),
+        ("runs", "error_message", "TEXT"),
+        ("runs", "traceback", "TEXT"),
+    )
+    with engine.begin() as conn:
+        for table, column, col_type in additions:
+            existing = {
+                row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            }
+            if column not in existing:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                )
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -92,10 +114,20 @@ def get_db() -> Generator[Session, None, None]:
 
 
 @contextmanager
-def session_scope() -> Generator[Session, None, None]:
+def session_scope(
+    session_factory: sessionmaker[Session] | None = None,
+) -> Generator[Session, None, None]:
     """Context-manager session for non-FastAPI callers (evaluation harness
-    scripts, one-off tools, tests): commits on clean exit, rolls back and
-    re-raises on any exception, always closes.
+    scripts, one-off tools like `tools/write_record.py`, tests): commits on
+    clean exit, rolls back and re-raises on any exception, always closes.
+
+    `session_factory`: optional override of the process-wide, `lru_cache`d
+    `get_session_factory()` -- additive, backward-compatible (every existing
+    call site passes none and gets exactly the previous behavior). Exists so
+    a caller that isn't itself request-scoped (namely `WriteRecordTool`,
+    which opens its own session rather than requiring `ToolRegistry` to
+    inject one -- see its own docstring) can still be pointed at an
+    isolated, throwaway database in tests instead of the real cached engine.
 
     Important: every `db/repository.py` create/write function commits its
     own write immediately (per docs/contracts.md section 6), so this does
@@ -107,7 +139,8 @@ def session_scope() -> Generator[Session, None, None]:
     `repository.py`) is rolled back on exception, and (2) the session is
     always closed, regardless of which path is taken.
     """
-    session = get_session_factory()()
+    factory = session_factory or get_session_factory()
+    session = factory()
     try:
         yield session
         session.commit()

@@ -344,13 +344,14 @@ class TestFinalRecordAssembly:
         _step(1, ToolName.PARSE_ENQUIRY),
         _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Singapore"}),
         _step(3, ToolName.SCORE_LEAD),
-        _step(4, ToolName.WRITE_RECORD),
     )
 
     def _full_registry(self) -> _FakeRegistry:
         return _FakeRegistry(
             {
-                "parse_enquiry": _FakeTool(_success({"name": "Jane Doe", "email": "jane@example.com"})),
+                "parse_enquiry": _FakeTool(
+                    _success({"name": "Jane Doe", "email": "jane@example.com", "phone": "+65 5551234"})
+                ),
                 "lookup_jurisdiction_rule": _FakeTool(
                     _success(
                         {
@@ -362,11 +363,12 @@ class TestFinalRecordAssembly:
                     )
                 ),
                 "score_lead": _FakeTool(_success({"score": 78, "breakdown": {"budget": 40}})),
-                "write_record": _FakeTool(_success({"lead_id": "lead-1", "dedupe_hash": "abc123"})),
             }
         )
 
-    def test_assembles_final_record_when_all_four_canonical_tools_succeed(self) -> None:
+    def test_assembles_final_record_when_all_assembly_tools_succeed(self) -> None:
+        from app.services.dedupe import compute_dedupe_hash
+
         result = run_plan(self.FULL_PLAN, ENQUIRY_TEXT, self._full_registry())
 
         assert result.error is None
@@ -375,20 +377,18 @@ class TestFinalRecordAssembly:
         assert result.final_record.jurisdiction_rule["country"] == "Singapore"
         assert result.final_record.score == 78
         assert result.final_record.score_breakdown == {"budget": 40}
-        assert result.final_record.dedupe_hash == "abc123"
+        assert result.final_record.dedupe_hash == compute_dedupe_hash("jane@example.com", "+65 5551234")
 
-    def test_final_record_is_none_when_a_canonical_tool_is_missing_from_the_plan(self) -> None:
+    def test_final_record_is_none_when_an_assembly_tool_is_missing_from_the_plan(self) -> None:
         plan = _plan(
             _step(1, ToolName.PARSE_ENQUIRY),
             _step(2, ToolName.LOOKUP_JURISDICTION_RULE),
-            _step(3, ToolName.SCORE_LEAD),
-            # no write_record step
+            # no score_lead step
         )
         registry = _FakeRegistry(
             {
                 "parse_enquiry": _FakeTool(_success({})),
                 "lookup_jurisdiction_rule": _FakeTool(_success({})),
-                "score_lead": _FakeTool(_success({"score": 1, "breakdown": {}})),
             }
         )
 
@@ -412,6 +412,153 @@ class TestFinalRecordAssembly:
         result = run_plan(plan, ENQUIRY_TEXT, registry)
 
         assert result.final_record is None
+
+
+class TestChainedArgResolution:
+    """`score_lead`/`write_record`/`lookup_jurisdiction_rule`'s args_schema
+    (docs/contracts.md section 4) require another canonical tool's own
+    output, which the Planner cannot know at planning time -- see
+    `agent/executor.py::_resolve_args`'s docstring. These tests exercise
+    that resolution directly, via `_FakeTool`'s recorded `args`."""
+
+    def test_parse_enquiry_always_receives_the_authoritative_enquiry_text(self) -> None:
+        calls_log: list[dict] = []
+        plan = _plan(_step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": "a stale planner placeholder"}))
+        registry = _FakeRegistry(
+            {"parse_enquiry": _FakeTool(_success({"name": "Jane"}), calls_log=calls_log)}
+        )
+
+        run_plan(plan, ENQUIRY_TEXT, registry)
+
+        assert calls_log == [{"enquiry_text": ENQUIRY_TEXT}]
+
+    def test_lookup_jurisdiction_rule_country_is_resolved_from_parse_enquiry_output(self) -> None:
+        calls_log: list[dict] = []
+        plan = _plan(
+            _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
+            _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "a placeholder, resolved at runtime"}),
+        )
+        registry = _FakeRegistry(
+            {
+                "parse_enquiry": _FakeTool(_success({"name": "Jane", "country": "Singapore"})),
+                "lookup_jurisdiction_rule": _FakeTool(
+                    _success({"country": "Singapore"}), calls_log=calls_log
+                ),
+            }
+        )
+
+        run_plan(plan, ENQUIRY_TEXT, registry)
+
+        assert calls_log == [{"country": "Singapore"}]
+
+    def test_lookup_jurisdiction_rule_keeps_its_own_args_when_no_parse_enquiry_step_ran(self) -> None:
+        """No `parse_enquiry` step at all in this plan -- there is no
+        canonical source to resolve `country` from, so the Plan's own value
+        must survive untouched."""
+        calls_log: list[dict] = []
+        plan = _plan(_step(1, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Vietnam"}))
+        registry = _FakeRegistry(
+            {"lookup_jurisdiction_rule": _FakeTool(_success({"country": "Vietnam"}), calls_log=calls_log)}
+        )
+
+        run_plan(plan, ENQUIRY_TEXT, registry)
+
+        assert calls_log == [{"country": "Vietnam"}]
+
+    def test_score_lead_receives_the_real_extracted_and_jurisdiction_rule_objects(self) -> None:
+        calls_log: list[dict] = []
+        extracted = {"name": "Jane Doe", "budget_band": "high"}
+        jurisdiction_rule = {"country": "Singapore", "requires_disclaimer": True, "restricted": False}
+        plan = _plan(
+            _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
+            _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Singapore"}),
+            _step(3, ToolName.SCORE_LEAD, {"extracted": "placeholder", "jurisdiction_rule": "placeholder"}),
+        )
+        registry = _FakeRegistry(
+            {
+                "parse_enquiry": _FakeTool(_success(extracted)),
+                "lookup_jurisdiction_rule": _FakeTool(_success(jurisdiction_rule)),
+                "score_lead": _FakeTool(_success({"score": 1, "breakdown": {}}), calls_log=calls_log),
+            }
+        )
+
+        run_plan(plan, ENQUIRY_TEXT, registry)
+
+        assert calls_log == [{"extracted": extracted, "jurisdiction_rule": jurisdiction_rule}]
+
+    def test_write_record_receives_the_real_extracted_jurisdiction_rule_and_score(self) -> None:
+        calls_log: list[dict] = []
+        extracted = {"name": "Jane Doe", "email": "jane@example.com"}
+        jurisdiction_rule = {"country": "Singapore"}
+        score_result = {"score": 78, "breakdown": {"budget": 40}}
+        plan = _plan(
+            _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
+            _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Singapore"}),
+            _step(3, ToolName.SCORE_LEAD),
+            _step(4, ToolName.WRITE_RECORD, {"extracted": "placeholder"}),
+        )
+        registry = _FakeRegistry(
+            {
+                "parse_enquiry": _FakeTool(_success(extracted)),
+                "lookup_jurisdiction_rule": _FakeTool(_success(jurisdiction_rule)),
+                "score_lead": _FakeTool(_success(score_result)),
+                "write_record": _FakeTool(
+                    _success({"lead_id": "1", "dedupe_hash": "h"}), calls_log=calls_log
+                ),
+            }
+        )
+
+        run_plan(plan, ENQUIRY_TEXT, registry)
+
+        assert calls_log == [
+            {"extracted": extracted, "jurisdiction_rule": jurisdiction_rule, "score": score_result}
+        ]
+
+    def test_resolved_args_not_plan_args_are_recorded_on_the_tool_call(self) -> None:
+        """The `ToolCall.args` recorded in the trace reflects what was
+        actually executed, not the Plan's raw placeholder -- strictly more
+        useful for observability (docs/architecture.md section 12)."""
+        extracted = {"name": "Jane Doe"}
+        plan = _plan(
+            _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
+            _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "will be overridden"}),
+        )
+        registry = _FakeRegistry(
+            {
+                "parse_enquiry": _FakeTool(_success({**extracted, "country": "Singapore"})),
+                "lookup_jurisdiction_rule": _FakeTool(_success({"country": "Singapore"})),
+            }
+        )
+
+        result = run_plan(plan, ENQUIRY_TEXT, registry)
+
+        assert result.trace.calls[1].args == {"country": "Singapore"}
+
+    def test_does_not_resolve_from_a_failed_upstream_call(self) -> None:
+        """If `parse_enquiry` failed, there is no successful result to
+        resolve `country` from -- `lookup_jurisdiction_rule` keeps its own
+        Plan-supplied value rather than crashing."""
+        calls_log: list[dict] = []
+        plan = _plan(
+            _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
+            _step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Singapore"}),
+        )
+        registry = _FakeRegistry(
+            {
+                "parse_enquiry": _FakeTool(_business_failure("adapter error")),
+                "lookup_jurisdiction_rule": _FakeTool(
+                    _success({"country": "Singapore"}), calls_log=calls_log
+                ),
+            }
+        )
+
+        result = run_plan(plan, ENQUIRY_TEXT, registry)
+
+        # Execution actually stops after step 1's failure (this is just
+        # confirming step 2, if it somehow still ran, wouldn't crash on a
+        # missing source) -- the real guarantee is in run_plan()'s own
+        # stop-on-failure behavior, covered elsewhere.
+        assert len(result.trace.calls) == 1
 
 
 class TestStageContext:

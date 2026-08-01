@@ -20,20 +20,26 @@ The brief is deliberately larger than three days comfortably allows. We are not 
 
 ---
 
+
+
 ## 2. Commercial terms
 
-| Item | Detail |
-|---|---|
-| Day rate | PHP 1,800 |
-| Total fee | PHP 5,400 for three days |
-| Payment trigger | On delivery, irrespective of assessment outcome |
+
+| Item                    | Detail                                                       |
+| ----------------------- | ------------------------------------------------------------ |
+| Day rate                | PHP 1,800                                                    |
+| Total fee               | PHP 5,400 for three days                                     |
+| Payment trigger         | On delivery, irrespective of assessment outcome              |
 | Model API reimbursement | Up to PHP 500 on production of a receipt or usage screenshot |
-| Start | Monday |
-| Delivery deadline | End of day Wednesday |
+| Start                   | Monday                                                       |
+| Delivery deadline       | End of day Wednesday                                         |
+
 
 No access will be given to any Whisky Cask Club system, account, credential or dataset. You deploy to your own hosting and use your own model API access. Free and trial tiers are expected and entirely acceptable. Small open models run locally are equally acceptable if you prefer.
 
 ---
+
+
 
 ## 3. What you are building
 
@@ -57,12 +63,14 @@ Carries out the plan by calling tools. Must use real tool calling or function ca
 
 Minimum tool set, all of which you implement:
 
-| Tool | Behaviour |
-|---|---|
-| `parse_enquiry` | LLM extraction of name, email, phone, country, budget band, asset interest, urgency |
+
+| Tool                       | Behaviour                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| `parse_enquiry`            | LLM extraction of name, email, phone, country, budget band, asset interest, urgency               |
 | `lookup_jurisdiction_rule` | Deterministic lookup against a small local rules file, returns the handling rule for that country |
-| `score_lead` | Deterministic scoring function over the extracted fields |
-| `write_record` | Persists the record, rejecting duplicates on a normalised hash of email and phone |
+| `score_lead`               | Deterministic scoring function over the extracted fields                                          |
+| `write_record`             | Persists the record, rejecting duplicates on a normalised hash of email and phone                 |
+
 
 The executor must be capable of reporting a tool failure back rather than continuing blindly.
 
@@ -110,6 +118,8 @@ One page, functional rather than designed. It must show, for any given run: the 
 
 ---
 
+
+
 ## 4. Constraints
 
 - Stack, models and framework are entirely your choice. Justify the choices in one paragraph.
@@ -118,6 +128,8 @@ One page, functional rather than designed. It must show, for any given run: the 
 - The system must be reachable at a public URL. Localhost is not a delivery.
 
 ---
+
+
 
 ## 5. Deliverables
 
@@ -132,33 +144,41 @@ An empty failure log will be read as a failure to test, not as a clean run. On a
 
 ---
 
+
+
 ## 6. Assessment
 
 Three hard gates, applied before anything else is scored.
 
-| Gate | Result |
-|---|---|
-| Does the URL work when opened cold, from an unfamiliar network? | Pass or fail |
-| Does the verifier catch a fabrication we deliberately induce? | Pass or fail |
+
+| Gate                                                               | Result       |
+| ------------------------------------------------------------------ | ------------ |
+| Does the URL work when opened cold, from an unfamiliar network?    | Pass or fail |
+| Does the verifier catch a fabrication we deliberately induce?      | Pass or fail |
 | Do the harness numbers reproduce when we run the system ourselves? | Pass or fail |
+
 
 Failure at any gate fails the trial, regardless of the quality of the rest.
 
-| Scored criterion | Out of |
-|---|---|
-| Evaluation harness rigour and honesty of reported figures | 5 |
-| Verifier genuinely independent and functionally effective | 5 |
-| Proof note accurately matches what exists | 5 |
-| Failure log honest and specific | 5 |
-| Agent loop works end to end | 5 |
-| Handling of the adversarial cases | 3 |
-| Questions asked before building rather than after | 3 |
-| Code legibility and structure | 3 |
-| Delivered on time without being chased | 3 |
+
+| Scored criterion                                          | Out of |
+| --------------------------------------------------------- | ------ |
+| Evaluation harness rigour and honesty of reported figures | 5      |
+| Verifier genuinely independent and functionally effective | 5      |
+| Proof note accurately matches what exists                 | 5      |
+| Failure log honest and specific                           | 5      |
+| Agent loop works end to end                               | 5      |
+| Handling of the adversarial cases                         | 3      |
+| Questions asked before building rather than after         | 3      |
+| Code legibility and structure                             | 3      |
+| Delivered on time without being chased                    | 3      |
+
 
 Note the weighting. A system with modest capability and rigorous, honest measurement scores above an impressive demonstration with no measurement behind it.
 
 ---
+
+
 
 ## 7. Working expectations
 

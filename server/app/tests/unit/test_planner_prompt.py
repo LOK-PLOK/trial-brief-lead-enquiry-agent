@@ -23,8 +23,9 @@ class TestPlannerSystemPrompt:
         assert "score_lead" in PLANNER_SYSTEM_PROMPT
         assert "exactly one" in PLANNER_SYSTEM_PROMPT.lower()
 
-    def test_treats_enquiry_text_as_untrusted_data(self) -> None:
-        assert "untrusted" in PLANNER_SYSTEM_PROMPT.lower()
+    def test_instructs_planner_not_to_include_write_record(self) -> None:
+        assert "Do **not** include `write_record`" in PLANNER_SYSTEM_PROMPT
+        assert "Verifier has passed" in PLANNER_SYSTEM_PROMPT
 
     def test_shares_no_text_with_the_verifier_prompt(self) -> None:
         """docs/architecture.md section 9: the verifier must be genuinely

@@ -16,6 +16,7 @@ from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCo
 from app.schemas.plan import Plan, PlanStep, ToolName
 from app.schemas.tool_trace import ToolCall, ToolCallStatus, ToolCallTrace
 from app.schemas.verifier import VerifierDecision
+from app.services.dedupe import compute_dedupe_hash
 from app.tools.base import Tool, ToolResult
 from app.tools.registry import ToolRegistry
 
@@ -118,19 +119,12 @@ class TestVerifierAgainstARealExecutorTrace:
                     success=True, data={"score": 70, "breakdown": {}}, error=None, latency_ms=1.0
                 ),
             )
-            self._mock_tool(
-                "write_record",
-                lambda self, args: ToolResult(
-                    success=True, data={"lead_id": "1", "dedupe_hash": "hash-1"}, error=None, latency_ms=1.0
-                ),
-            )
             registry = ToolRegistry()
             plan = Plan(
                 steps=[
                     _plan_step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),
                     _plan_step(2, ToolName.LOOKUP_JURISDICTION_RULE, {"country": "Singapore"}),
                     _plan_step(3, ToolName.SCORE_LEAD),
-                    _plan_step(4, ToolName.WRITE_RECORD),
                 ]
             )
 
@@ -148,8 +142,17 @@ class TestVerifierAgainstARealExecutorTrace:
             )
 
             assert decision.passed is True
+            assert decision.fabrication_detected is False
             assert decision.plan_deviation_detected is False  # trace genuinely matches the plan
             assert len(adapter.requests) == 1
+            # Derived evidence: handling_note from lookup must appear unchanged in the record.
+            lookup_call = next(
+                c for c in execution.trace.calls if c.tool == ToolName.LOOKUP_JURISDICTION_RULE
+            )
+            assert (
+                execution.final_record.jurisdiction_rule["handling_note"]
+                == lookup_call.result["handling_note"]
+            )
         finally:
             for name in canonical_names:
                 Tool._registry.pop(name, None)
@@ -239,3 +242,149 @@ class TestVerifierEndToEndFabricationScenario:
         assert decision.fabrication_detected is True
         assert decision.fabricated_fields == ["phone"]
         assert decision.plan_deviation_detected is False  # untouched: trace matches plan
+
+    def test_tampered_handling_note_fails_even_when_model_says_pass(self) -> None:
+        now = datetime.now(UTC)
+        lookup = {
+            "country": "Singapore",
+            "requires_disclaimer": False,
+            "restricted": False,
+            "handling_note": "standard",
+        }
+        plan = Plan(
+            steps=[
+                _plan_step(1, ToolName.PARSE_ENQUIRY),
+                _plan_step(2, ToolName.LOOKUP_JURISDICTION_RULE),
+                _plan_step(3, ToolName.SCORE_LEAD),
+            ]
+        )
+        trace = ToolCallTrace(
+            calls=[
+                ToolCall(
+                    step=1,
+                    tool=ToolName.PARSE_ENQUIRY,
+                    args={},
+                    status=ToolCallStatus.SUCCESS,
+                    result={"name": "Jane Doe", "email": "jane@example.com"},
+                    latency_ms=1.0,
+                    started_at=now,
+                    finished_at=now,
+                ),
+                ToolCall(
+                    step=2,
+                    tool=ToolName.LOOKUP_JURISDICTION_RULE,
+                    args={},
+                    status=ToolCallStatus.SUCCESS,
+                    result=lookup,
+                    latency_ms=1.0,
+                    started_at=now,
+                    finished_at=now,
+                ),
+                ToolCall(
+                    step=3,
+                    tool=ToolName.SCORE_LEAD,
+                    args={},
+                    status=ToolCallStatus.SUCCESS,
+                    result={"score": 70, "breakdown": {}},
+                    latency_ms=1.0,
+                    started_at=now,
+                    finished_at=now,
+                ),
+            ]
+        )
+        final_record = {
+            "extracted": {"name": "Jane Doe", "email": "jane@example.com"},
+            "jurisdiction_rule": {**lookup, "handling_note": "altered by executor"},
+            "score": 70,
+            "score_breakdown": {},
+            "dedupe_hash": compute_dedupe_hash("jane@example.com", None),
+        }
+        adapter = _ScriptedVerifierAdapter(_passing_decision())
+
+        decision = verify(ENQUIRY_TEXT, plan, trace, final_record, adapter)
+
+        assert decision.passed is False
+        assert decision.fabrication_detected is True
+        fields = decision.fabricated_fields
+        assert "jurisdiction_rule" in fields or "handling_note" in fields
+
+
+class TestVerifierFabricationReconciliationIntegration:
+    def test_llm_false_positive_on_tool_derived_fields_is_cleared(self) -> None:
+        now = datetime.now(UTC)
+        lookup = {
+            "country": "Singapore",
+            "requires_disclaimer": False,
+            "restricted": False,
+            "handling_note": "standard",
+        }
+        plan = Plan(
+            steps=[
+                _plan_step(1, ToolName.PARSE_ENQUIRY),
+                _plan_step(2, ToolName.LOOKUP_JURISDICTION_RULE),
+                _plan_step(3, ToolName.SCORE_LEAD),
+            ]
+        )
+        parse = {"name": "Jane Doe", "email": "jane@example.com", "phone": None}
+        trace = ToolCallTrace(
+            calls=[
+                ToolCall(
+                    step=1,
+                    tool=ToolName.PARSE_ENQUIRY,
+                    args={},
+                    status=ToolCallStatus.SUCCESS,
+                    result=parse,
+                    latency_ms=1.0,
+                    started_at=now,
+                    finished_at=now,
+                ),
+                ToolCall(
+                    step=2,
+                    tool=ToolName.LOOKUP_JURISDICTION_RULE,
+                    args={},
+                    status=ToolCallStatus.SUCCESS,
+                    result=lookup,
+                    latency_ms=1.0,
+                    started_at=now,
+                    finished_at=now,
+                ),
+                ToolCall(
+                    step=3,
+                    tool=ToolName.SCORE_LEAD,
+                    args={},
+                    status=ToolCallStatus.SUCCESS,
+                    result={"score": 70, "breakdown": {}},
+                    latency_ms=1.0,
+                    started_at=now,
+                    finished_at=now,
+                ),
+            ]
+        )
+        final_record = {
+            "extracted": parse,
+            "jurisdiction_rule": dict(lookup),
+            "score": 70,
+            "score_breakdown": {},
+            "dedupe_hash": compute_dedupe_hash("jane@example.com", None),
+        }
+        false_positive = VerifierDecision(
+            passed=False,
+            confidence=0.7,
+            fabrication_detected=True,
+            fabricated_fields=[
+                "dedupe_hash",
+                "jurisdiction_rule.handling_note",
+                "jurisdiction_rule.requires_disclaimer",
+            ],
+            plan_deviation_detected=False,
+            deviation_details=None,
+            reason="These fields do not appear in the enquiry text.",
+        )
+        adapter = _ScriptedVerifierAdapter(false_positive)
+
+        decision = verify(ENQUIRY_TEXT, plan, trace, final_record, adapter)
+
+        assert decision.fabrication_detected is False
+        assert decision.fabricated_fields == []
+        assert decision.passed is True
+        assert decision.plan_deviation_detected is False

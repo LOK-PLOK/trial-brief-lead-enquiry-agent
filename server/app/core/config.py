@@ -32,11 +32,12 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _SERVER_DIR = Path(__file__).resolve().parents[2]
 _REPO_ROOT = _SERVER_DIR.parent
+_DEFAULT_DATABASE_URL = f"sqlite:///{_SERVER_DIR / 'data' / 'app.db'}"
 
 
 class ModelProvider(str, Enum):
@@ -44,11 +45,20 @@ class ModelProvider(str, Enum):
 
     Keep this enum as the single source of truth for valid `MODEL_PROVIDER`
     values; `llm/factory.py` switches on it to pick a concrete adapter.
+
+    `OPENROUTER` is the one provider with a concrete `ModelAdapter`
+    implementation today (`llm/openrouter_adapter.py`) — it exposes an
+    OpenAI-compatible API in front of many backend models (selected via
+    `MODEL_NAME`, e.g. `"openai/gpt-4o-mini"`), so a single adapter covers a
+    wide range of models without pinning a provider-specific SDK dependency.
+    `OPENAI`/`ANTHROPIC`/`OLLAMA` remain valid, documented extension points
+    (see `llm/factory.py`'s docstring) with no adapter behind them yet.
     """
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
+    OPENROUTER = "openrouter"
 
 
 class Settings(BaseSettings):
@@ -65,8 +75,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- Model provider selection ---
-    model_provider: ModelProvider = ModelProvider.OPENAI
-    model_name: str = "gpt-4o-mini"
+    # OpenRouter is the only provider with a real adapter today (see
+    # ModelProvider's docstring), so it's the working default; `model_name`
+    # is an OpenRouter model id ("<vendor>/<model>").
+    model_provider: ModelProvider = ModelProvider.OPENROUTER
+    model_name: str = "openai/gpt-4o-mini"
 
     # Optional per-stage overrides (fall back to `model_name` when unset).
     # A distinct verifier model is a documented, partial mitigation for
@@ -79,16 +92,41 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     ollama_host: str = "http://localhost:11434"
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     # --- Database ---
-    database_url: str = f"sqlite:///{_SERVER_DIR / 'data' / 'app.db'}"
+    database_url: str = _DEFAULT_DATABASE_URL
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _default_database_url_when_blank(cls, value: str | None) -> str:
+        """Treat an explicitly-blank `DATABASE_URL=` (as shipped in
+        `.env.example`, intended as "leave unset to use the built-in
+        default") the same as truly unset.
+
+        Without this, pydantic-settings treats an env var that is *present
+        but empty* as an explicit override, silently discarding the default
+        above and handing `create_engine()` an unparseable empty string
+        (`sqlalchemy.exc.ArgumentError`) -- a real, previously-reproduced bug
+        (see `docs/implementation_status.md`, "Critical #5"), since this
+        field has no `or`-based fallback anywhere it's consumed, unlike e.g.
+        `resolved_model()`'s stage-override fields.
+        """
+        return value or _DEFAULT_DATABASE_URL
 
     @model_validator(mode="after")
     def _check_provider_credentials(self) -> Settings:
-        # TODO(config): once adapters exist, decide whether missing credentials
-        # should raise here (fail fast) or only when that adapter is actually
-        # instantiated by llm/factory.py. Left permissive for now so the app
-        # can boot without secrets configured (e.g. CI, first-run scaffolding).
+        # Deliberately left permissive here rather than raising: `Settings()`
+        # is constructed pervasively (every test's `test_settings` fixture,
+        # scripts that never touch an adapter, etc.), most of which have no
+        # need for a real credential at all (they inject a fake `ModelAdapter`
+        # directly). The credential is required, and actually enforced, at
+        # the one place it's actually needed instead: `OpenRouterAdapter.__init__`
+        # (see llm/openrouter_adapter.py) raises `LLMProviderError` immediately
+        # if constructed without `OPENROUTER_API_KEY` set -- i.e. exactly when
+        # `llm/factory.py::get_adapter()` is actually called, not merely when
+        # settings are loaded.
         return self
 
     def resolved_model(self, stage: str) -> str:
