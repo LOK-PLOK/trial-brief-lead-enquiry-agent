@@ -1,8 +1,8 @@
 """FastAPI app factory. See docs/architecture.md sections 3 and 13.
 
-Single-origin deployment: this process serves both the JSON API (under
-`/api/*`) and, when present, the built React static assets — so no CORS
-configuration is needed in production (confirmed single-container direction).
+Same-origin (single container) needs no CORS. Split frontend/backend hosts
+(e.g. two Render services) require `CORS_ORIGINS` so browser preflight
+`OPTIONS` requests are answered by `CORSMiddleware` instead of 405.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,6 +38,16 @@ def create_app() -> FastAPI:
     # Creates tables on boot if they don't exist yet; see db/session.py's
     # init_db() docstring for why no migration tool is used for this trial.
     init_db()
+
+    # Must be registered before routers so preflight OPTIONS is handled here
+    # rather than falling through to route matching (which returns 405).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     app.include_router(routes_health.router)
     app.include_router(routes_runs.router)

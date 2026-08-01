@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
 
+    # Comma-separated browser origins allowed to call `/api/*` cross-origin.
+    # Required when the SPA and API are on different hosts (e.g. separate
+    # Render services). Example:
+    #   CORS_ORIGINS=https://your-frontend.onrender.com,http://localhost:5173
+    # Leave blank for same-origin / Vite-proxied local development.
+    cors_origins: str = ""
+
     # --- Model provider selection ---
     # OpenRouter is the only provider with a real adapter today (see
     # ModelProvider's docstring), so it's the working default; `model_name`
@@ -141,6 +148,10 @@ class Settings(BaseSettings):
             "verifier": self.verifier_model,
         }
         return overrides.get(stage) or self.model_name
+
+    def cors_origin_list(self) -> list[str]:
+        """Parsed `CORS_ORIGINS` for `CORSMiddleware.allow_origins`."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache
