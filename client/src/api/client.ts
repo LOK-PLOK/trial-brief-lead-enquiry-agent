@@ -2,8 +2,9 @@
  * Thin typed fetch client for the FastAPI JSON API. See docs/contracts.md
  * section 7 ("API Endpoints") and docs/architecture.md section 3.
  *
- * Relative paths (`/api/...`) work unmodified both in dev (proxied by Vite,
- * see vite.config.ts) and in production (same-origin, single container).
+ * `VITE_API_BASE_URL` prefixes every request. Leave it unset (or empty) for
+ * local Vite proxy / same-origin deploys; set it to the backend origin when
+ * the SPA and API are on different hosts (e.g. separate Render services).
  */
 
 import type {
@@ -17,6 +18,8 @@ import type {
   RunSummary,
   TimelineEvent,
 } from './types'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
 /**
  * Raised whenever the API responds with a non-2xx status. `detail` carries
@@ -37,7 +40,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })
