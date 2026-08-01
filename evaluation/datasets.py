@@ -35,7 +35,7 @@ DATASETS: dict[str, DatasetInfo] = {
     "manual_e01_e14": DatasetInfo(
         id="manual_e01_e14",
         label="Manual Test Suite (E01–E14)",
-        description="Assessor-oriented scenarios from docs/manual_testing.md.",
+        description="Assessor-oriented scenarios from docs/testing.md.",
         n_enquiries=14,
         default_repeats=1,
         path=_FIXTURES / "manual_e01_e14.json",

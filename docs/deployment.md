@@ -62,13 +62,15 @@ Vite proxies `/api` to the backend during local development. In production the b
 
 ### Evaluation harness
 
-Requires the 15 enquiry samples in `evaluation/fixtures/enquiries.json` (brief §3.1). Until those arrive, the harness fails loudly rather than reporting empty metrics.
+Requires 15 enquiries in `evaluation/fixtures/enquiries.json` (brief §3.1). Stand-in fictional fixtures are present so the harness is runnable; replace with the official samples when supplied. The harness validates count by design rather than reporting empty metrics.
 
 ```bash
 # from repo root
 PYTHONPATH=server python -m evaluation.harness
 PYTHONPATH=server python -m evaluation.adversarial
 ```
+
+UI and API job runners are documented in [`testing.md`](testing.md).
 
 ---
 
@@ -155,7 +157,21 @@ Do **not** hardcode a listen port in the Render dashboard. Render injects `PORT`
 
 ---
 
-## What is intentionally not deployed as a button
+## Harness entry points
 
-- The 45-run evaluation harness and adversarial script are **CLI-only** (`python -m evaluation.harness` / `evaluation.adversarial`). The API only *reads* harness results (`GET /api/harness/summary`, `GET /api/harness/runs`).
-- The Repair Loop (`docs/architecture.md` section 10) is not implemented; failed verifications quarantine directly. See `docs/implementation_status.md`.
+- **UI (recommended for assessors):** **Harness Testing** tab — start jobs, watch progress, open summary/charts/run detail. See [`testing.md`](testing.md).
+- **CLI:** `PYTHONPATH=server python -m evaluation.harness` and `python -m evaluation.adversarial` (same `Pipeline.run()` as the API).
+- **API:** `POST /api/harness/jobs`, progress/cancel endpoints, and `GET /api/harness/batches/{id}/dashboard` (plus read endpoints for summary/runs).
+
+The Repair Loop (`docs/architecture.md` section 10) is implemented: one repair attempt after verifier failure, then completed or quarantined. Repair never calls `write_record`.
+
+---
+
+## Submission ops checklist
+
+Operational steps remaining for trial delivery (not code gaps):
+
+1. Set `OPENROUTER_API_KEY` and deploy the Docker image to Render (see above).
+2. Cold-network check of the public URL; fill URL/timestamp into [`proof_note.md`](proof_note.md).
+3. Run a live harness (UI **1× Standard** or CLI) and optionally adversarial; keep reports under `evaluation/reports/`.
+4. Replace stand-in enquiry fixtures with the official brief samples when supplied, then re-run for the reproducibility gate.

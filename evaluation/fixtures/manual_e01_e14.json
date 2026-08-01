@@ -1,5 +1,5 @@
 {
-  "description": "Manual test suite E01–E14 from docs/manual_testing.md. Optional harness dataset for assessor demos (default 1 repeat).",
+  "description": "Manual test suite E01–E14 from docs/testing.md. Optional harness dataset for assessor demos (default 1 repeat).",
   "enquiries": [
     {
       "id": "E01",

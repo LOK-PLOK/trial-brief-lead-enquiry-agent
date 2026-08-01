@@ -5,30 +5,45 @@
 
 An empty failure log is a failure to test. Gaps below are named on purpose.
 
-## What broke / was hard
+## What broke or was hard
 
 1. **Scaffold vs runnable gap.** Early phases left tools, API routes, and the LLM adapter as `NotImplementedError` / HTTP 501 stubs by design. Closing that gap required OpenRouter integration, four tool implementations, and wiring `Pipeline.run()` into FastAPI without redesigning contracts.
-2. **Blank `DATABASE_URL=`.** Shipping `.env.example` with an empty `DATABASE_URL` made pydantic-settings override the SQLite default with `""`, breaking DB boot and ~14 tests until a blank→default validator was added.
+
+2. **Blank `DATABASE_URL=`.** Shipping `.env.example` with an empty `DATABASE_URL` made pydantic-settings override the SQLite default with `""`, breaking DB boot and many tests until a blank→default validator was added.
+
 3. **`POST /api/runs` dependency crash.** Before the adapter existed, `Depends(get_adapter)` raised during dependency resolution and returned HTTP 500 instead of a clean 501 — fixed by implementing OpenRouter and a real route body.
-4. **Repair Loop deferred then required.** Orchestrator originally quarantined on verifier fail without repair (scoped earlier). Brief §3.5 and contracts require one repair pass — now implemented (`reextract` / `reexecute` / `replan`) with a fresh Verifier call afterward.
+
+4. **Repair Loop deferred then required.** The Orchestrator originally quarantined on verifier fail without repair. Brief §3.5 and contracts require one repair pass — now implemented (`reextract` / `reexecute` / `replan`) with a fresh Verifier call afterward.
+
 5. **Post-verify persistence redesign.** Original architecture ran `write_record` inside the Executor before Verifier, so Repair's full-plan re-run self-collided on `dedupe_hash` and falsely quarantined new leads. Corrected: Verifier is the gate; Orchestrator runs `write_record` once after pass; Repair never persists; quarantine inserts no lead.
-6. **Verifier treated legitimate tool-derived values as fabricated.** During manual testing, architecture review clarified that fabrication means unsupported by the enquiry text **and** the tool call trace taken together. Root cause: fabrication was defined too narrowly (enquiry only), so `handling_note`, `score`, and `jurisdiction_rule` looked “invented.” Resolution: split verification — extracted fields vs enquiry; derived fields vs successful tool outputs (unchanged). Prompt + deterministic derived-field cross-check updated accordingly.
-7. **Deterministic match did not clear LLM false positives.** After the split above, deterministic derived-field checks correctly found no mismatches, but the Verifier still returned `fabrication_detected=true` because LLM claims on `handling_note` / `requires_disclaimer` / `dedupe_hash` (absent from the enquiry) were never reconciled away. Resolution: after the LLM call, clear fabrication claims on tool-derived fields that exactly match successful tool outputs and on `dedupe_hash` when recomputation matches; set `fabrication_detected=false` when none remain.
-8. **Official 15 enquiry samples not in-repo.** Brief §3.1 says samples would be supplied Monday morning. Stand-in fictional fixtures were added so the harness is runnable; replace with the official set when received and re-run for the reproducibility gate.
-9. **Extractor returned `unknown` for clear budget/urgency evidence.** Manual runs (E02–E05, E10) quarantined because `parse_enquiry` left `budget_band`/`urgency` as `unknown` despite amounts like `CAD 25–40k` / `AUD 55k` / `under £5,000` and phrases like `not urgent` / `no rush`. Root cause: prompt had no band thresholds or format/phrase guidance, plus a strong anti-guess bias. Resolution: expanded `parse_enquiry` system prompt with explicit budget/urgency mapping and currency/phrase examples — still a single structured LLM call (no deterministic parsers).
-10. **Verifier treated planner placeholder args as evidence.** Run `5c056b3d-…` (Priya / E03) had correct `parse_enquiry` (`budget_band=low`, `urgency=low`) and matching `jurisdiction_rule`, but the Verifier LLM claimed those fields “should have been unknown” and that jurisdiction mismatched — values that existed only in `plan.steps[*].args` placeholders, not in the tool trace. Resolution: redact plan step `args` in the Verifier user prompt; instruct that planner placeholders are never authoritative; add deterministic `final_record.extracted` vs successful `parse_enquiry` assembly check.
-11. **Verifier rejected valid `urgency=low` for “Not urgent”.** LLM reason claimed “not urgent should imply a lower urgency than low” — impossible: the schema only allows `high|medium|low|unknown`. Resolution: Verifier prompt now treats enums as a closed schema and accepts supported values (e.g. “not urgent” → `low`).
-12. **City mistaken for country (open).** E10 (“calling from Lagos”) can extract `country=Lagos`; `lookup_jurisdiction_rule` accepts any string and falls back to `default`. Prefer `Nigeria` when only a city is stated — not yet hardened in the extractor prompt.
-13. **Verifier acted as a second extractor on urgency.** E01/E02/E10: extractor set `urgency=low` for “No rush at all” / “next few months (not urgent)” / “Not urgent”, but the Verifier re-chose another band or contradicted itself (“low is supported” then fabricated). Resolution: extracted-field check redefined as SUPPORTED / CONTRADICTED / INSUFFICIENT — ask whether a **reasonable extractor** could produce the parser’s value; never fail for personal preference among valid enums; never both call a field SUPPORTED and list it in `fabricated_fields`. Clear band contradictions (e.g. `medium` for £95k under ≥70k=`high`) remain fail-worthy.
-14. **Extractor under-banded £95k as medium (E06).** Guidance already said ≥70k → high and listed £95,000, but the model still returned `medium` for “approximately £95,000” — likely hedging on “approximately” / comma formatting / £ vs numeric threshold. Resolution: strengthened `parse_enquiry` budget rules — currency symbols equivalent; commas ignored; approximators do not change the band; explicit worked examples forcing £95k / AUD 120k / CAD 80k → high.
-15. **Verifier LLM produced internally self-contradictory decisions (prompt-only fix was insufficient).** Even after item 13's prompt rework, the model sometimes wrote a `reason` that affirms the exact value it simultaneously lists in `fabricated_fields` — e.g. `budget_band "high" is CONTRADICTED because AUD 120,000 clearly falls into the high category` (Olivia Hart, AUD 120k), `urgency "low" is supported by "No rush at all" but is fabricated` (E01), or `urgency "high" is contradicted because the enquiry says "please call me urgently"` — a logical-consistency bug in the LLM's free text, not an extraction disagreement, so no amount of prompt wording fully prevents it. Interim mitigation: reason-text self-contradiction stripper. **Proper fix (item 16).**
-16. **Verifier architecture: free-text fabrication list let the LLM act as a second extractor.** Root cause: `VerifierDecision` only had `fabricated_fields` + free-text `reason`, so the model both classified support and decided quarantine in one unconstrained step — and frequently contradicted itself or preferred another enum. Re-running `parse_enquiry` inside the Verifier was evaluated and rejected (still non-deterministic; answers “what would I extract?” not “is this value supported?”). Resolution: (a) structured `extracted_field_verdicts` with SUPPORTED / CONTRADICTED / INSUFFICIENT_EVIDENCE; (b) deterministic closed-enum support classifier (`agent/extracted_support.py`) over enquiry + chosen value; (c) contradiction gate that admits **only CONTRADICTED** extracted fields into `fabricated_fields` (deterministic SUPPORTED wins over LLM CONTRADICTED). Planner / Executor / scoring unchanged. Regression suite covers E01–E08/E10–E11 hostile-verifier cases plus under-£5k / no-rush / AUD120k / £95k phrases.
 
-## What I could not finish (honestly)
+6. **Verifier treated legitimate tool-derived values as fabricated.** Fabrication was defined too narrowly (enquiry text only), so `handling_note`, `score`, and `jurisdiction_rule` looked “invented.” Resolution: verify extracted fields against the enquiry; verify derived fields against successful tool outputs.
 
-1. **True fabrication-caught rate.** Needs ground-truth labels independent of the Verifier. Reported as `None` with an honesty note rather than invented.
+7. **Deterministic match did not clear LLM false positives.** After the split above, derived-field checks found no mismatches, but the Verifier still returned `fabrication_detected=true` for tool-backed fields. Resolution: after the LLM call, clear fabrication claims on tool-derived fields that match successful tool outputs and on `dedupe_hash` when recomputation matches.
+
+8. **Official 15 enquiry samples not in-repo.** Brief §3.1 says samples would be supplied. Stand-in fictional fixtures were added so the harness is runnable; replace with the official set when received and re-run for the reproducibility gate.
+
+9. **Extractor returned `unknown` for clear budget/urgency evidence.** Manual runs quarantined when amounts and phrases were present but bands stayed `unknown`. Resolution: expanded `parse_enquiry` system prompt with budget/urgency mapping examples — still a single structured LLM call (no regex parsers).
+
+10. **Verifier treated planner placeholder args as evidence.** Plan step `args` placeholders were mistaken for tool evidence. Resolution: redact plan step `args` in the Verifier user prompt; add a deterministic check that `final_record.extracted` matches successful `parse_enquiry` output.
+
+11. **Verifier rejected valid `urgency=low` for “Not urgent”.** The model claimed a level below `low` — impossible under the closed enum. Resolution: Verifier prompt treats enums as closed and accepts supported values (e.g. “not urgent” → `low`).
+
+12. **City mistaken for country (open).** E10 (“calling from Lagos”) can extract `country=Lagos`; jurisdiction lookup falls back to `default`. Prefer a country when only a city is stated — not yet hardened in the extractor prompt.
+
+13. **Verifier acted as a second extractor on urgency.** Extractor set `urgency=low` for clear “not urgent” language, but the Verifier re-chose another band. Resolution: extracted-field check redefined as SUPPORTED / CONTRADICTED / INSUFFICIENT_EVIDENCE — ask whether a reasonable extractor could produce the value; never fail for preference among valid enums.
+
+14. **Extractor under-banded £95k as medium.** Guidance already said ≥70k → high, but the model still returned `medium` for “approximately £95,000”. Resolution: strengthened budget rules (currency symbols equivalent; approximators do not change the band; explicit high-band examples).
+
+15. **Verifier LLM produced self-contradictory decisions.** The model sometimes affirmed a value in `reason` while listing it in `fabricated_fields`. Prompt-only fixes were insufficient. Proper architecture fix is item 16.
+
+16. **Verifier architecture: unconstrained fabrication list.** Root cause: free-text `fabricated_fields` let the model decide quarantine in one unconstrained step. Re-running `parse_enquiry` inside the Verifier was evaluated and rejected. Resolution: structured `extracted_field_verdicts`; deterministic closed-enum support classifier (`agent/extracted_support.py`); contradiction gate that admits **only CONTRADICTED** extracted fields into `fabricated_fields`. Planner / Executor / scoring unchanged.
+
+## What I could not finish
+
+1. **True fabrication-caught rate.** Needs ground-truth labels independent of the Verifier. Reported as `None` with an honesty note.
 2. **First-attempt schema-breach rates.** Adapter retries are internal to `complete_structured()`; surfacing them would extend an immutable contract. Reported as `None`.
-3. **Live adversarial / 45-run numbers on production.** Code and fixtures are ready; full live runs need a funded OpenRouter key and a public Render URL (deploy is the remaining ops step).
+3. **Live adversarial / 45-run numbers on production.** Code and fixtures are ready; full live runs need a funded OpenRouter key and a public Render URL.
 4. **Proof-note URL field.** Filled only after the cold-network check post-deploy.
 
 ## What I would do with another week

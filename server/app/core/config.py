@@ -109,7 +109,7 @@ class Settings(BaseSettings):
         but empty* as an explicit override, silently discarding the default
         above and handing `create_engine()` an unparseable empty string
         (`sqlalchemy.exc.ArgumentError`) -- a real, previously-reproduced bug
-        (see `docs/implementation_status.md`, "Critical #5"), since this
+        (see `docs/deployment.md` for OpenRouter / DATABASE_URL setup), since this
         field has no `or`-based fallback anywhere it's consumed, unlike e.g.
         `resolved_model()`'s stage-override fields.
         """

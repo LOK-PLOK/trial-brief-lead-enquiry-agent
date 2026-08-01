@@ -6,7 +6,7 @@
 
 ## What I built
 
-A two-role lead-enquiry agent with an independent verifier gate: Planner (structured `Plan`) → deterministic Executor (four tools via `ToolRegistry`) → independent Verifier (separate prompt/call) → one-shot Repair Loop → persist. OpenRouter supplies the LLM through a provider-agnostic `ModelAdapter`. FastAPI serves `/api/*` and the built React SPA from one container. SQLite stores runs, LLM usage, leads, and harness batches. An offline evaluation harness runs 15×3=45 identical `Pipeline.run()` calls and writes JSON/Markdown reports; three adversarial enquiries run separately.
+A two-role lead-enquiry agent with an independent verifier gate: Planner (structured `Plan`) → deterministic Executor (four tools via `ToolRegistry`) → independent Verifier (separate prompt/call) → one-shot Repair Loop → persist. OpenRouter supplies the LLM through a provider-agnostic `ModelAdapter`. FastAPI serves `/api/*` and the built React SPA from one container. SQLite stores runs, LLM usage, leads, and harness batches. An offline evaluation harness runs 15×3=45 identical `Pipeline.run()` calls and writes JSON/Markdown reports; three adversarial enquiries run separately. Assessors can also start harness jobs from the **Harness Testing** UI.
 
 ## What I measured
 
@@ -21,6 +21,8 @@ After deploy to Render (single Docker Web Service, health `/api/health`, no logi
 3. Submit a short fictional enquiry on the Run tab; confirm plan, tool trace, record, verifier decision, and cost panels populate.
 4. Note the URL, timestamp, and network used here before submission.
 
-**Public URL:** _(fill after Render deploy)_  
-**Checked from:** _(device / network)_  
-**Checked at:** _(UTC timestamp)_
+| Field | Value |
+| --- | --- |
+| **Public URL** | _(fill after Render deploy)_ |
+| **Checked from** | _(device / network)_ |
+| **Checked at** | _(UTC timestamp)_ |

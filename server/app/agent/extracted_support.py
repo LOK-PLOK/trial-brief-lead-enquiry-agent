@@ -7,7 +7,7 @@ is that value SUPPORTED, CONTRADICTED, or INSUFFICIENT_EVIDENCE?
 Used by the Verifier's contradiction gate so a supported extraction can
 never be quarantined because the Verifier LLM preferred another band.
 Thresholds / phrase sets mirror the documented parse_enquiry bands
-(docs/manual_testing.md, parse_enquiry_prompt.py) — verification-side
+(docs/testing.md, parse_enquiry_prompt.py) — verification-side
 only; the parser itself is unchanged.
 """
 
