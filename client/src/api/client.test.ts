@@ -78,13 +78,13 @@ describe('api/client', () => {
 
   it('throws an ApiError with the parsed detail message on a JSON error body', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
-      jsonResponse({ detail: 'Not implemented yet.' }, { status: 501 }),
+      jsonResponse({ detail: 'Internal server error.' }, { status: 500 }),
     )
 
     await expect(createRun('hello')).rejects.toMatchObject({
       name: 'ApiError',
-      status: 501,
-      message: 'Not implemented yet.',
+      status: 500,
+      message: 'Internal server error.',
     })
   })
 

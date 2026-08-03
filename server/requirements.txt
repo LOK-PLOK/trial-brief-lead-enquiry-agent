@@ -1,7 +1,6 @@
 # Runtime dependencies. Versions pinned to what was verified to install and
-# import cleanly together (see "Verify backend imports" in the scaffolding
-# notes) — bump deliberately, not accidentally, since reproducibility of the
-# evaluation harness depends on a stable environment.
+# import cleanly together — bump deliberately, not accidentally, since
+# reproducibility of the evaluation harness depends on a stable environment.
 
 fastapi==0.141.1
 uvicorn[standard]==0.52.0

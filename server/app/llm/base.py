@@ -37,8 +37,8 @@ class StructuredCompletionResponse:
     """Normalized response shape every adapter implementation must return.
 
     `parsed` is already validated against `request.response_schema` by the
-    adapter (or the caller, per adapter — see TODO below); `raw_response` is
-    kept for durable logging (docs/architecture.md section 12).
+    adapter before return; `raw_response` is kept for durable logging
+    (docs/architecture.md section 12).
     """
 
     parsed: BaseModel

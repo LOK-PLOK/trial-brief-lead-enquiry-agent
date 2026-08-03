@@ -40,8 +40,6 @@ class PlanStep(BaseModel):
 class Plan(BaseModel):
     steps: list[PlanStep]
 
-    # TODO(agent/planner): enforce the deterministic, non-LLM policy guardrail
-    # described in docs/architecture.md section 6 / section 15 here (e.g. a
-    # model_validator asserting `lookup_jurisdiction_rule` and `score_lead`
-    # each appear exactly once). This is intentionally left unimplemented in
-    # the scaffold since it encodes a business rule, not a structural type.
+    # Mandatory-tool guardrail (lookup_jurisdiction_rule + score_lead each
+    # exactly once) is enforced in `agent/planner.py` (`_check_mandatory_tools`),
+    # not as a Plan model_validator — business rule lives with the planner.

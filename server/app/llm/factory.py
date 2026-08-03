@@ -6,9 +6,8 @@ and docs/architecture.md's confirmed provider-agnostic direction).
 
 `OPENROUTER` is the one provider with a concrete adapter today
 (`llm/openrouter_adapter.py`). `OPENAI`/`ANTHROPIC`/`OLLAMA` remain valid
-`ModelProvider` values with no adapter behind them yet; adding one is the
-same two-step change documented since the scaffold review, and still never
-touches planner/executor/verifier/tools:
+`ModelProvider` values with no adapter behind them yet; adding one is a
+two-step change that never touches planner/executor/verifier/tools:
   1. Add `app/llm/<provider>_adapter.py` implementing `ModelAdapter`.
   2. Add a branch below that imports it and returns an instance.
 """

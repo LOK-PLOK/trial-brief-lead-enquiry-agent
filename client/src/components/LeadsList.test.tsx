@@ -47,9 +47,9 @@ describe('LeadsList', () => {
   })
 
   it('shows an error state when the request fails', async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Internal server error.' }, 500))
     renderWithQueryClient(<LeadsList />)
-    expect(await screen.findByRole('alert')).toHaveTextContent('501')
+    expect(await screen.findByRole('alert')).toHaveTextContent('500')
   })
 
   it('shows an empty state when there are no leads', async () => {

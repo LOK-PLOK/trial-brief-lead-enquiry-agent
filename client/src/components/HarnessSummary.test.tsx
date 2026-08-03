@@ -70,12 +70,12 @@ describe('HarnessSummary', () => {
     expect(screen.getByText('Loading harness summary…')).toBeInTheDocument()
   })
 
-  it('shows an error state when the API has not been wired up yet (501)', async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+  it('shows an error state when the harness summary request fails (500)', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Internal server error.' }, 500))
     renderWithQueryClient(<HarnessSummary />)
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Request failed (501): Not implemented yet.',
+      'Request failed (500): Internal server error.',
     )
   })
 
@@ -96,7 +96,7 @@ describe('HarnessSummary', () => {
   })
 
   it('always shows the duplicate-detection independence note, regardless of query state', async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Internal server error.' }, 500))
     renderWithQueryClient(<HarnessSummary />)
 
     expect(

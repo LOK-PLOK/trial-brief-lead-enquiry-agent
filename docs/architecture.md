@@ -1,6 +1,6 @@
 ---
 name: Lead Enquiry Agent Architecture
-overview: A provider-agnostic, two-role (Planner + Executor) agent architecture with an independent LLM verifier gate, a one-shot repair loop, and a reproducible 45-run evaluation harness, deployed as a single FastAPI+React container backed by SQLite.
+overview: A provider-agnostic, two-role (Planner + Executor) agent architecture with an independent LLM verifier gate, a one-shot repair loop, and a reproducible 45-run evaluation harness, deployable as a single FastAPI+React container (or split frontend/API hosts) backed by SQLite.
 todos: []
 isProject: false
 ---
@@ -8,7 +8,7 @@ isProject: false
 
 # Lead Enquiry Agent — Architecture Design
 
-Confirmed direction from clarifying questions: **provider-agnostic LLM adapter** (no hard dependency on OpenAI/Anthropic/Ollama) and **single-container deployment** (FastAPI serves the built React app, one public URL).
+Confirmed direction from clarifying questions: **provider-agnostic LLM adapter** (no hard dependency on OpenAI/Anthropic/Ollama) and **single-container deployment** as the default packaging (FastAPI serves the built React app, one public URL). Split frontend/API hosts (e.g. two Render services) are a packaging variant of the same architecture — client `VITE_API_BASE_URL` + API `CORS_ORIGINS` — not a redesign of the pipeline.
 
 ---
 
@@ -133,12 +133,12 @@ Dockerfile                       # multi-stage: build client, copy into server i
 
 ## 3. FastAPI Architecture
 
-- App-factory pattern (`create_app()`); no CORS needed (single-origin, single container).
+- App-factory pattern (`create_app()`); single-origin Docker needs no CORS. Split hosts enable `CORSMiddleware` via `CORS_ORIGINS` (see `docs/deployment.md`).
 - Routers:
   - `POST /api/runs {enquiry_text}` → runs the full pipeline synchronously, returns `RunResult` (plan, trace, record, verifier decision, cost/tokens/latency).
   - `GET /api/runs` / `GET /api/runs/{id}` → history and detail (backs the UI's run viewer).
   - `GET /api/leads` → accepted + quarantined records.
-  - `GET /api/harness/summary` / `GET /api/harness/runs` → reads the latest persisted `harness_batches` row and its 45 runs (harness itself runs out-of-band as a CLI script, **not** triggered via the API, to avoid request timeouts and keep the API responsive/cheap).
+  - `GET /api/harness/*` → summary/runs plus job start/progress/cancel, datasets, parse preview, batch dashboard/rows, and run timeline/detail (CLI harness still calls `Pipeline.run()` directly; UI/API jobs use the same pipeline).
   - `GET /api/health` → liveness probe for the hosting platform.
 - Dependencies: `get_db()` session, `get_adapter()` (constructed once from settings, cached on `app.state`).
 - Response models = the same `schemas/` Pydantic classes used internally (single source of truth, no duplicate DTOs).
@@ -379,11 +379,12 @@ sequenceDiagram
 
 ## 13. Deployment
 
-- Single multi-stage Dockerfile: stage 1 builds the React app; stage 2 copies the build output into the FastAPI image, served via a static-files catch-all route; `uvicorn` single-process entrypoint (appropriate for trial-scale traffic and SQLite's single-writer nature).
-- Target: Fly.io or Render free tier (Dockerfile-native, supports a persistent volume for the SQLite file) — exact platform decided at build time, doesn't change the architecture.
-- Config via environment variables: `MODEL_PROVIDER`, `MODEL_NAME`, optional `PLANNER_MODEL`/`VERIFIER_MODEL` overrides, the relevant provider API key or `OLLAMA_HOST`, `DATABASE_URL`.
+- **Default packaging:** single multi-stage Dockerfile — stage 1 builds the React app; stage 2 copies the build into the FastAPI image, served via a static-files catch-all; `uvicorn` single-process entrypoint (trial-scale traffic + SQLite single-writer). Blueprint: `render.yaml`.
+- **Live packaging variant:** two Render services (Static Site client + Docker API). Same codebase; client build sets `VITE_API_BASE_URL`, API sets `CORS_ORIGINS`. Does not change Planner/Executor/Verifier/harness architecture.
+- Target: Render (or similar) free tier; optional persistent volume for SQLite — platform choice does not change architecture.
+- Config via environment variables: `MODEL_PROVIDER`, `MODEL_NAME`, optional `PLANNER_MODEL`/`VERIFIER_MODEL` overrides, provider API key, `DATABASE_URL`, plus split-deploy `CORS_ORIGINS` / `VITE_API_BASE_URL`.
 - `/api/health` endpoint for the platform's uptime probe.
-- Process note (not architecture, but a delivery requirement): after deploy, verify the public URL from a separate device/network (e.g. phone hotspot) to satisfy the proof-note requirement.
+- Process note: after deploy, verify the public frontend URL from a separate device/network (e.g. phone hotspot) for the proof-note requirement. See `docs/deployment.md` and `docs/proof_note.md`.
 
 ---
 

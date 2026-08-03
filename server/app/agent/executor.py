@@ -295,12 +295,11 @@ def run_plan(
        `ToolResult(success=False, error=...)` (an expected business
        outcome, not a bug). Note: `write_record` duplicate rejection is
        handled by the Orchestrator *after* Verifier pass, not here.
-    3. **Unexpected internal exception** -- anything else (a tool bug, e.g.
-       today's placeholder `NotImplementedError`; a provider timeout inside
-       `parse_enquiry`; an unknown tool name from the registry). Logged
-       loudly at ERROR with a full traceback, but still converted into the
-       same structured failure shape rather than left to propagate and
-       crash the caller.
+    3. **Unexpected internal exception** -- anything else (a tool bug; a
+       provider timeout inside `parse_enquiry`; an unknown tool name from
+       the registry). Logged loudly at ERROR with a full traceback, but
+       still converted into the same structured failure shape rather than
+       left to propagate and crash the caller.
 
     Execution stops at the first failure of any kind -- this is the only
     way a step goes unexecuted; the Executor never itself skips, reorders,

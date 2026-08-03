@@ -34,7 +34,7 @@ describe('Home', () => {
   })
 
   it('renders the four required tabs with Run active by default', () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Internal server error.' }, 500))
     renderWithQueryClient(<Home />)
 
     expect(screen.getAllByRole('button', { name: 'Run' }).length).toBe(2)
@@ -45,7 +45,7 @@ describe('Home', () => {
   })
 
   it('disables submit until the enquiry textarea has content', async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Internal server error.' }, 500))
     const user = userEvent.setup()
     renderWithQueryClient(<Home />)
 
@@ -72,10 +72,10 @@ describe('Home', () => {
     expect(screen.getByRole('button', { name: 'Running…' })).toBeInTheDocument()
     expect(screen.getByText('Running the pipeline…')).toBeInTheDocument()
 
-    resolveFetch(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+    resolveFetch(jsonResponse({ detail: 'Internal server error.' }, 500))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Request failed (501): Not implemented yet.',
+      'Request failed (500): Internal server error.',
     )
   })
 
@@ -168,7 +168,7 @@ describe('Home', () => {
       if (url.includes('/api/runs')) {
         return jsonResponse(leadsAfterRun ? [completedRun] : [])
       }
-      return jsonResponse({ detail: 'Not implemented yet.' }, 501)
+      return jsonResponse({ detail: 'Internal server error.' }, 500)
     })
 
     const user = userEvent.setup()
@@ -190,7 +190,7 @@ describe('Home', () => {
   })
 
   it('loading an adversarial sample switches to the Run tab and fills the textarea', async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Internal server error.' }, 500))
     const user = userEvent.setup()
     renderWithQueryClient(<Home />)
 
@@ -243,7 +243,7 @@ describe('Home', () => {
       if (url.includes('/api/harness/summary')) {
         return jsonResponse(null)
       }
-      return jsonResponse({ detail: 'Not implemented yet.' }, 501)
+      return jsonResponse({ detail: 'Internal server error.' }, 500)
     })
     const user = userEvent.setup()
     renderWithQueryClient(<Home />)

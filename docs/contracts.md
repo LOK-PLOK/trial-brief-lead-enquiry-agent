@@ -11,17 +11,13 @@ This document defines every immutable contract in the system: the exact shape of
 boundary (Planner ↔ Executor ↔ Verifier ↔ Repair, Tool ↔ Executor, LLM Adapter ↔ agent code,
 Repository ↔ agent/API code, API ↔ client, and the database schema itself).
 
-**Status note:** most business-logic function bodies in the scaffold still `raise
-NotImplementedError` (see `docs/development-rules.md` — implementation is deliberately not yet
-written). That does **not** make the contracts below provisional: the Pydantic schemas
-(`server/app/schemas/`), the `Tool` / `ModelAdapter` / repository function signatures, and the
-FastAPI route signatures are already committed types. Implementation must satisfy these contracts
-exactly, not redesign them. Any change to a contract in this document is an architecture change
-and requires the same justification bar as `docs/development-rules.md` demands ("Do not change the
+**Status note:** the contracts below describe the **implemented** system. Pydantic schemas
+(`server/app/schemas/`), tools, `ModelAdapter` / `OpenRouterAdapter`, repository functions, and
+FastAPI routes are live. Any change to a contract in this document is an architecture change and
+requires the same justification bar as `docs/development-rules.md` demands ("Do not change the
 architecture without justification").
 
-Source of truth for each contract (read the code, not just this doc, for the full docstring/TODO
-context):
+Source of truth for each contract (prefer the code if a docstring and this doc ever disagree):
 
 | Contract | Source file(s) |
 |---|---|
@@ -109,11 +105,10 @@ The Orchestrator strips any `write_record` steps before Executor/Repair and invo
 - `PlanStep.rationale: str`, `min_length=1` — required, read by the Verifier's plan-deviation
   check, never executed.
 - `Plan.steps: list[PlanStep]` — no length/order constraint enforced by the schema itself.
-- **Deterministic, non-LLM policy guardrail** (documented in `docs/architecture.md` §6/§15, not
-  yet implemented — tracked as a TODO on `Plan` itself): mandatory tools (`lookup_jurisdiction_rule`,
-  `score_lead`) must each appear exactly once, checked in code, never left to model judgment. This
-  guardrail is the primary defense against prompt injection making the Planner omit a required
-  step.
+- **Deterministic, non-LLM policy guardrail** (`agent/planner.py` `_check_mandatory_tools`):
+  mandatory tools (`lookup_jurisdiction_rule`, `score_lead`) must each appear exactly once. Checked
+  in code after structured decode; one guardrail retry is allowed with the violation text fed back.
+  This is the primary defense against prompt injection making the Planner omit a required step.
 - Response is obtained via `adapter.complete_structured(..., response_schema=Plan)` — see §5 for
   the adapter's own retry contract.
 
@@ -122,7 +117,7 @@ The Orchestrator strips any `write_record` steps before Executor/Repair and invo
 | Failure | Behavior |
 |---|---|
 | Schema validation failure (malformed JSON / wrong types / invalid enum value) | Adapter retries internally at most once (§5). The **first-attempt outcome is still counted** toward the harness's planner schema-breach-rate metric regardless of whether the retry recovers it — never silently absorbed. |
-| Guardrail violation (mandatory tool missing/duplicated) once implemented | Must be caught in code, not by the model; caller should treat this the same as a schema failure for reporting purposes. |
+| Guardrail violation (mandatory tool missing/duplicated) after the one retry | Raised as a planner failure to the Orchestrator; recorded as a structured run error, not silently ignored. |
 | Adapter/provider error (timeout, rate limit, auth) | Propagates as an `LLMProviderError` (or provider-specific exception) to the Orchestrator; not silently swallowed here. |
 
 ---
@@ -227,7 +222,7 @@ never crashes and the trace built so far is always returned intact:
 |---|---|---|
 | **Tool validation failure** | `Tool.execute()` raises `ToolValidationError` — malformed/hallucinated `step.args`, or a buggy `run()` returning a malformed successful result. | Recorded with `status="error"`, structured `validation_errors`, execution stops. |
 | **Controlled tool failure** | `Tool.execute()` returns normally with `ToolResult(success=False, error=...)` — an expected business outcome, not a bug. Post-verify `write_record` duplicates are handled by the Orchestrator (appended to the trace after Verifier pass), not by the Executor's pre-persist loop. | Recorded with `status="error"`, `error` set from `ToolResult.error`, `validation_errors=null`, execution stops. |
-| **Unexpected internal exception** | Anything else raised out of `Tool.execute()` — a tool bug (e.g. today's placeholder `NotImplementedError`), a provider timeout inside `parse_enquiry`, or an unknown tool name from the registry. | Logged loudly at ERROR with a full traceback (so it is never silently swallowed), then recorded with `status="error"`, `error=f"{type}: {message}"`, execution stops — the exception itself never propagates out of `run_plan()`. |
+| **Unexpected internal exception** | Anything else raised out of `Tool.execute()` — a tool bug, a provider timeout inside `parse_enquiry`, or an unknown tool name from the registry. | Logged loudly at ERROR with a full traceback (so it is never silently swallowed), then recorded with `status="error"`, `error=f"{type}: {message}"`, execution stops — the exception itself never propagates out of `run_plan()`. |
 | Any deviation from the plan (a step skipped/reordered/substituted) | Cannot originate from the Executor itself (it only iterates `plan.steps`) — if the Verifier detects one, it necessarily traces back to a compromised Plan or an Executor bug, which is exactly why the Verifier checks trace-vs-plan independently. | — |
 
 ---
@@ -307,9 +302,9 @@ A deterministic contradiction gate in `agent/verifier.py` ensures only
   2. **Plan deviation** — any skip/reorder/substitution between `plan.steps` and
      `tool_call_trace.calls` → `plan_deviation_detected=true`, human-readable detail in
      `deviation_details`.
-- `reason` must be non-empty whenever `passed` is `False` (documented contract; enforcement via a
-  `model_validator` is a currently-open TODO on the schema — see the file — but the *rule* is
-  fixed regardless of when the validator lands).
+- `reason` must be non-empty whenever `passed` is `False` (documented contract on
+  `schemas/verifier.py`; intentional follow-up: add a Pydantic `model_validator` to enforce it at
+  parse time).
 - `confidence: float`, constrained `0.0 ≤ confidence ≤ 1.0`.
 
 ### Failure modes
@@ -317,7 +312,7 @@ A deterministic contradiction gate in `agent/verifier.py` ensures only
 | Failure | Behavior |
 |---|---|
 | Verifier LLM call schema-invalid | Same adapter-level retry-once contract as §5/§1; first-attempt outcome still counted for the harness. |
-| `passed=False` with empty `reason` | Contract violation — must never happen once the validator above is implemented; treat as a bug, not a valid decision, if seen. |
+| `passed=False` with empty `reason` | Contract violation — treat as a bug if seen; post-processing may still populate a reason when deterministic gates flip the decision. |
 | Verifier and Planner/Extractor share a systematic blind spot (same model family) | Not detectable from the contract alone — mitigated by allowing a distinct `VERIFIER_MODEL` (see `Settings.resolved_model("verifier")`), documented as a **partial** mitigation only (`docs/architecture.md` §15). |
 
 ---
@@ -367,8 +362,8 @@ def execute(self, raw_args: dict[str, Any] | BaseModel) -> ToolResult: ...
   doesn't match `result_schema`. Skips result validation entirely when `result.success is False`
   (an expected business failure's `data` is `None` by convention, not something to validate).
 - **Failure modes:** `ToolValidationError` for malformed/hallucinated input or a buggy `run()`
-  returning the wrong result shape (a framework-level contract violation); `run()`'s own
-  `NotImplementedError` (current scaffold stage) or business-logic exception otherwise.
+  returning the wrong result shape (a framework-level contract violation); unexpected exceptions
+  from `run()` for genuine bugs.
 
 ### `run()`
 
@@ -383,8 +378,8 @@ def run(self, args: BaseModel) -> ToolResult: ...
   deterministically. Unexpected exceptions must still propagate (loudly), never be swallowed.
 - **Failure modes:** `success=False` with a human-readable `error` string for expected failures
   (duplicate dedupe hash, unknown jurisdiction, adapter error inside `parse_enquiry`); an
-  unhandled exception for genuine bugs. At the current scaffold stage, every tool's `run()` simply
-  `raise NotImplementedError` once `execute()` has already validated the input — no business logic.
+  unhandled exception for genuine bugs. All four required tools (`parse_enquiry`,
+  `lookup_jurisdiction_rule`, `score_lead`, `write_record`) implement real `run()` logic.
 
 ### `manifest_entry()`
 
@@ -509,8 +504,9 @@ Output — `StructuredCompletionResponse` (dataclass):
 |---|---|
 | Schema validation fails on both the original attempt and the one internal retry | Adapter surfaces this to the caller (exact exception type is provider/implementation-specific); the caller (Planner/Verifier/`parse_enquiry`) is responsible for counting the **first-attempt** outcome toward the harness's schema-breach-rate metric regardless of the retry's outcome. |
 | Provider error (timeout, rate limit, auth failure) | Must propagate as an `LLMProviderError` (or equivalent) rather than a bare provider SDK exception, so `main.py`'s central exception handler can map it to a structured JSON error body with the correlating `run_id`. |
-| No concrete adapter implemented for the configured `MODEL_PROVIDER` (current scaffold state) | `llm/factory.build_adapter()` raises `NotImplementedError` naming the missing provider — this is an infra/config error, not a runtime data contract violation. |
-| Local model (e.g. via Ollama) without guaranteed JSON-schema support | Expected to fall back to instruct-then-validate-then-retry and have a *higher* schema-breach rate — must be reported honestly, not tuned away. |
+| `MODEL_PROVIDER=openrouter` | `llm/factory.build_adapter()` returns `OpenRouterAdapter` (the production provider). |
+| `MODEL_PROVIDER` set to openai / anthropic / ollama | `build_adapter()` raises `NotImplementedError` naming the missing adapter — intentional; those providers are reserved enum values without a concrete adapter yet. Infra/config error, not a runtime data-contract violation. |
+| Local model without guaranteed JSON-schema support | Would fall back to instruct-then-validate-then-retry and likely show a higher schema-breach rate — report honestly if/when enabled. |
 
 ---
 
@@ -589,9 +585,9 @@ Output of `create_lead` (a `Lead` ORM row, conceptually):
 
 ## 7. API endpoints
 
-**Purpose:** The single-origin FastAPI surface the React client (and nothing else — the harness
-calls `Pipeline.run()` directly, not these routes) talks to. Response models are the exact same
-`schemas/` Pydantic classes used internally — no duplicate DTOs. Defined in
+**Purpose:** The FastAPI JSON surface the React client talks to. The CLI harness also calls
+`Pipeline.run()` directly (not only via these routes). Response models are the `schemas/` Pydantic
+classes (plus thin request/response wrappers in `schemas/harness.py` and route modules). Defined in
 `server/app/api/routes_*.py`.
 
 | Method & path | Purpose | Response model |
@@ -599,15 +595,23 @@ calls `Pipeline.run()` directly, not these routes) talks to. Response models are
 | `POST /api/runs` | Run the full pipeline synchronously for one enquiry. | `RunResult` |
 | `GET /api/runs` | List past runs (history view). | `list[RunSummary]` |
 | `GET /api/runs/{run_id}` | Fetch one run's full detail. | `RunResult` |
-| `GET /api/leads` | List accepted/quarantined leads, optional `?status=` filter. | *(TODO: not yet typed as a response model)* |
-| `GET /api/harness/summary` | Latest harness batch's aggregate metrics. | *(TODO: not yet typed)* |
-| `GET /api/harness/runs` | The 45 individual runs of the latest harness batch. | *(TODO: not yet typed)* |
+| `GET /api/leads` | List accepted/quarantined leads, optional `?status=` filter. | `list[LeadOut]` |
+| `GET /api/harness/summary` | Latest harness batch's aggregate metrics. | `HarnessSummary \| null` |
+| `GET /api/harness/runs` | Runs belonging to the latest harness batch. | `list[RunSummary]` |
+| `GET /api/harness/datasets` | Named datasets available to the UI/CLI. | `list[HarnessDatasetOut]` |
+| `POST /api/harness/parse` | Preview-parse custom / single enquiry text. | `HarnessParseResponse` |
+| `POST /api/harness/jobs` | Start a background harness job (`202`). | `HarnessJobOut` |
+| `GET /api/harness/jobs/{job_id}` | Job progress / status. | `HarnessJobOut` |
+| `POST /api/harness/jobs/{job_id}/cancel` | Request cancellation. | `HarnessJobOut` |
+| `GET /api/harness/batches/{batch_id}/dashboard` | Aggregated dashboard for a batch. | `HarnessDashboard` |
+| `GET /api/harness/batches/{batch_id}/runs` | Per-enquiry rows for a batch. | `list[HarnessRunRow]` |
+| `GET /api/harness/runs/{run_id}/timeline` | Stage timeline for one run. | `list[TimelineEvent]` |
+| `GET /api/harness/runs/{run_id}` | Full run detail (harness path). | `RunResult` |
 | `GET /api/health` | Liveness probe. | `{"status": "ok"}` |
 
 ### JSON examples
 
-`POST /api/runs` request (contract, though `CreateRunRequest` is currently an untyped placeholder
-class in `routes_runs.py` pending a real Pydantic model):
+`POST /api/runs` request (`CreateRunRequest` in `routes_runs.py`):
 
 ```json
 { "enquiry_text": "Hi, I'm interested in whisky cask investment opportunities in Singapore..." }
@@ -668,19 +672,20 @@ class in `routes_runs.py` pending a real Pydantic model):
   never reaches route logic.
 - Response models are asserted by FastAPI (`response_model=...`) against the exact `schemas/`
   classes — a route cannot silently return a shape that violates the contract.
-- No CORS configuration — single-origin deployment (`docs/architecture.md` §3/§13); routes assume
-  same-origin requests from the built React app or local dev's Vite proxy.
+- Local Docker / single-container deploys serve the built React app from the same origin as `/api/*`.
+  Split deploys (current Render setup) point the client at the API via `VITE_API_BASE_URL`.
 - `GET /api/leads?status=...` — `status` must be one of `accepted | quarantined` when provided
-  (enforced by whatever validates against `Lead.status`, §8).
+  (`routes_leads.py` returns `422` otherwise).
 
 ### Failure modes
 
 | Failure | Response |
 |---|---|
-| Route not yet implemented (current scaffold state) | `501 Not Implemented`, `{"detail": "Not implemented yet."}` |
-| `GET /api/runs/{run_id}` — unknown id | Must become `404` once implemented (per the route's own TODO). |
-| Domain errors (`ToolExecutionError`, schema validation errors, `LLMProviderError`) | Mapped by `main.py`'s central exception handlers to structured JSON error bodies carrying the correlating `run_id` — never a bare unhandled `500`. |
-| Malformed request body | FastAPI's standard `422 Unprocessable Entity` with field-level detail. |
+| `GET /api/runs/{run_id}` — unknown id | `404` with a detail message naming the missing id. |
+| `GET /api/harness/jobs/{job_id}` — unknown id | `404`. |
+| `GET /api/harness/batches/{batch_id}/dashboard` — unknown batch | `404`. |
+| Domain / provider errors during a run | Prefer a structured `RunResult(final_status="error", ...)` from `Pipeline.run()` rather than an unhandled `500`. |
+| Malformed request body / invalid `status` query | FastAPI `422 Unprocessable Entity` with field-level detail. |
 
 ---
 
@@ -700,7 +705,7 @@ output verbatim.
 {
   "id": "b2e1c4a0-...",
   "enquiry_text": "Hi, I'm interested in...",
-  "enquiry_id": "enq-07",
+  "enquiry_id": "E07",
   "repeat_index": 2,
   "is_adversarial": false,
   "plan": { "steps": [ /* ... */ ] },

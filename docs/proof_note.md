@@ -3,21 +3,21 @@
 **Candidate:** Paul France M. Detablan  
 **Brief:** WCC-TRIAL-A
 
-## What I Built
+## What I built
 
-During this exercise, I built a lead enquiry processing system that combines LLM reasoning with deterministic business logic. Users can submit a natural language enquiry through a React frontend, which is processed by a FastAPI backend. A Planner first decides which tools should be used, after which the Executor extracts structured information, applies jurisdiction rules, calculates a lead score, and only stores the result after it has been independently verified.
+I built a lead-enquiry agent that converts an unstructured customer enquiry into a verified structured lead. A React frontend sends the enquiry to a FastAPI backend, where an LLM Planner decides which tools should be executed and in what order. The Executor then runs those tools deterministically to extract key information from the enquiry, apply the appropriate jurisdiction rules, calculate a lead score, and prepare the final record. An independent Verifier uses a separate prompt and LLM call to check that the extracted information is supported by the original enquiry and that the execution followed the planned workflow.
 
-To improve reliability, the system includes a separate Verifier that checks whether the extracted information is actually supported by the original enquiry instead of simply trusting the previous LLM output. If verification fails, a single repair attempt is made before the run is quarantined. Every run records the execution plan, tool trace, verifier decision, latency, token usage, and cost for later inspection.
+If verification fails, the system performs one repair attempt before running verification again. Only verified leads are written to the database. If verification still fails, the enquiry is quarantined with an explanation instead of being silently discarded. Each run records the execution plan, tool trace, verifier decision, latency, token usage, and cost.
 
-## What I Measured
+## What I measured
 
-I also implemented an evaluation harness that runs the same production pipeline against predefined datasets, adversarial samples, or custom enquiries. The harness measures completion and quarantine rates, repair outcomes, latency, token usage, cost, verifier results, and other execution statistics. These metrics are stored and displayed through the Harness Testing dashboard to make testing repeatable and transparent.
+I implemented an evaluation harness that runs the same production pipeline against multiple datasets, including the Official Trial A samples (E01–E15), with three executions per enquiry (45 runs). The harness measures completion, quarantine and error rates, verifier pass rates, fabrication detection, repair attempts and successes, tool-selection accuracy, latency, token usage, cost, and run-to-run consistency. Results are available through the Harness Testing page and are also written as Markdown and JSON reports for later review.
 
-## Live URL Verification
+## Live URL check
 
-The application was deployed publicly on Render as separate frontend and backend services:
+The application is deployed publicly on Render as two separate services with no login required:
 
 - **Frontend:** https://trial-brief-lead-enquiry-agent-client.onrender.com
 - **Backend:** https://trial-brief-lead-enquiry-agent.onrender.com
 
-To confirm the deployment worked outside my development environment, I accessed the application using my mobile phone over a cellular data connection rather than my home network. The frontend loaded successfully, the backend health endpoint responded correctly, and I completed a full end-to-end test by submitting a fictional enquiry and confirming that the execution plan, tool trace, verifier decision, and final record were generated correctly.
+To confirm the deployment worked outside my development environment, I accessed the application from my mobile phone using a cellular data connection instead of my home network. The frontend loaded successfully, the backend health endpoint responded correctly, and I completed a full end-to-end test by submitting a fictional enquiry and confirming that the execution plan, tool trace, verifier decision, and final record were generated successfully.

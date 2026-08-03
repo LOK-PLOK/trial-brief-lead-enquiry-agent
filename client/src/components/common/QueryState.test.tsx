@@ -16,12 +16,12 @@ describe('QueryState', () => {
 
   it('renders a formatted ApiError message with status code', () => {
     render(
-      <QueryState isLoading={false} error={new ApiError(501, 'Not implemented yet.')}>
+      <QueryState isLoading={false} error={new ApiError(500, 'Internal server error.')}>
         <p>content</p>
       </QueryState>,
     )
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Request failed (501): Not implemented yet.',
+      'Request failed (500): Internal server error.',
     )
   })
 

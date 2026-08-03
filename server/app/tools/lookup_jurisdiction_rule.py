@@ -20,10 +20,10 @@ from app.tools.base import Tool, ToolResult
 
 logger = get_logger(__name__)
 
-# In-process cache of the parsed rules file, per the tool's own TODO ("it's
-# small and static") -- loaded once per process rather than re-read from
-# disk on every call. Keyed by the resolved path so a test pointing the tool
-# at a different `rules_path` never sees another test's cached content.
+# In-process cache of the parsed rules file (small and static) -- loaded once
+# per process rather than re-read from disk on every call. Keyed by the
+# resolved path so a test pointing the tool at a different `rules_path`
+# never sees another test's cached content.
 _RULES_CACHE: dict[str, dict[str, Any]] = {}
 _RULES_CACHE_LOCK = threading.Lock()
 

@@ -1,15 +1,13 @@
-"""API response shapes for `GET /api/harness/summary` and `GET
-/api/harness/runs`. See docs/architecture.md section 11, evaluation/metrics.py
-(the actual metrics computation these mirror), and docs/contracts.md section 7,
-which lists both endpoints' response models as "(TODO: not yet typed)" -- these
-are that type, added now that the routes themselves are implemented (Phase 3).
+"""API response shapes for harness routes (`/api/harness/*`).
+
+See docs/architecture.md section 11, docs/contracts.md section 7, and
+`evaluation/metrics.py` (metrics computation these mirror).
 
 Field-for-field mirrors of `evaluation/metrics.py::_compute_metrics_from_runs()`'s
 returned dict (`HarnessMetrics`/`HarnessVariance`/`HarnessVarianceByEnquiry`) and
 the `harness_batches` row (`HarnessSummary`) -- and, in turn, of the frontend's
-hand-mirrored `client/src/api/types.ts` (same names), which predates this file
-and is treated as the authoritative shape to match exactly rather than
-independently redesigned.
+hand-mirrored `client/src/api/types.ts` (same names), treated as the authoritative
+shape to match exactly rather than independently redesigned.
 """
 
 from __future__ import annotations

@@ -67,9 +67,6 @@ class RunResult(BaseModel):
 
     created_at: datetime | None = None
 
-    # TODO(agent/orchestrator): this is the object Pipeline.run() assembles
-    # and returns; API routes and the harness both consume it as-is.
-
 
 class RunSummary(BaseModel):
     """Lightweight projection of RunResult for list views (GET /api/runs)."""

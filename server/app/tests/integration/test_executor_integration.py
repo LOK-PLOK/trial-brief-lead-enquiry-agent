@@ -2,9 +2,8 @@
 `ToolRegistry` and `Tool` base class (not a duck-typed fake -- see
 tests/unit/test_executor.py for those), so the Executor's actual dispatch
 through `ToolRegistry.get_tool()` and `Tool.execute()`'s validate -> run ->
-validate pipeline is exercised end-to-end. Business logic is mocked: each
-tool here is a "mock tool" per this task's requirement, standing in for the
-still-`NotImplementedError`-raising real ones. See docs/contracts.md
+validate pipeline is exercised end-to-end. Per-tool business logic is
+mocked so these tests isolate Executor control flow. See docs/contracts.md
 sections 2 and 4.
 
 `ToolName` is a closed enum, so a mock must be registered under one of the

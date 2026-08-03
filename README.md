@@ -15,6 +15,11 @@ The system runs end-to-end with [OpenRouter](https://openrouter.ai) as the LLM p
 [`docs/deployment.md`](docs/deployment.md) for environment variables, local setup, and Render
 deployment.
 
+**Live (Render, no login):**
+[frontend](https://trial-brief-lead-enquiry-agent-client.onrender.com) ·
+[backend `/api/health`](https://trial-brief-lead-enquiry-agent.onrender.com/api/health)
+(split services; Docker single-container is also supported — see deployment docs).
+
 ## Documentation
 
 | Document | Purpose |
@@ -57,12 +62,15 @@ npm install
 npm run dev
 ```
 
-Full stack (single container, mirrors production):
+Full stack (single container — UI + API same origin):
 
 ```bash
 docker build -t lead-enquiry-agent .
 docker run --env-file .env -p 8000:8000 lead-enquiry-agent
 ```
+
+The **live** Render deploy uses two services (Static Site + Docker API) with
+`VITE_API_BASE_URL` and `CORS_ORIGINS`; details in [`docs/deployment.md`](docs/deployment.md).
 
 ## Evaluation harness
 

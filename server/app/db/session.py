@@ -70,9 +70,9 @@ def get_session_factory() -> sessionmaker[Session]:
 def init_db() -> None:
     """Create all tables if they don't exist.
 
-    No migration tool is used for this trial (see scaffold review: Alembic
-    was removed as unnecessary for a single-environment 3-day assessment with
-    no production schema history to preserve). Additive nullable columns are
+    No migration tool is used for this trial (Alembic was intentionally
+    omitted for a single-environment assessment with no production schema
+    history to preserve). Additive nullable columns are
     applied via `_ensure_sqlite_columns` so existing local DBs pick up new
     observability fields without a full reset.
     """

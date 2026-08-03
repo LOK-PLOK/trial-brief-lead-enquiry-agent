@@ -43,8 +43,7 @@ class ParseEnquiryTool(Tool):
 
         An adapter failure (provider error, or schema validation still
         failing after the adapter's own one internal retry) is treated as an
-        *expected* business outcome for an LLM-backed tool -- exactly as
-        this method's own prior TODO specified -- and reported as
+        *expected* business outcome for an LLM-backed tool and reported as
         `ToolResult(success=False, error=...)` rather than raised, so the
         Executor logs and halts deterministically (docs/contracts.md
         section 2's "controlled tool failure" category) instead of treating

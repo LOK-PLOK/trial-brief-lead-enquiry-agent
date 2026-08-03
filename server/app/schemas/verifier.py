@@ -58,6 +58,6 @@ class VerifierDecision(BaseModel):
     model_config = {"populate_by_name": True}
 
     # TODO(agent/verifier): add a model_validator enforcing that `reason` is
-    # non-empty whenever `passed` is False. Left out of the scaffold because
-    # it's a business rule on the verifier's contract, not a structural type,
-    # but it should live here (schemas), not scattered across call sites.
+    # non-empty whenever `passed` is False. Intentional follow-up — business
+    # rule on the verifier contract; should live here (schemas), not scattered
+    # across call sites.

@@ -1,7 +1,6 @@
-"""API response shape for `GET /api/leads`. See docs/architecture.md section 5
-(LEADS table) and docs/contracts.md section 7, which lists this endpoint's
-response model as "(TODO: not yet typed as a response model)" -- this is that
-type, added now that the route itself is implemented (Phase 3).
+"""API response shape for `GET /api/leads`.
+
+See docs/architecture.md section 5 (LEADS table) and docs/contracts.md section 7.
 
 Deliberately named `LeadOut`, not `Lead`, to avoid colliding with the ORM
 `app.db.models.Lead` class it's built from -- the two are imported together
