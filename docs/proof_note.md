@@ -1,28 +1,23 @@
 # Proof Note
 
 **Candidate:** Paul France M. Detablan  
-**Brief:** WCC-TRIAL-A  
-**Limit:** 400 words
+**Brief:** WCC-TRIAL-A
 
-## What I built
+## What I Built
 
-A two-role lead-enquiry agent with an independent verifier gate: Planner (structured `Plan`) → deterministic Executor (four tools via `ToolRegistry`) → independent Verifier (separate prompt/call) → one-shot Repair Loop → persist. OpenRouter supplies the LLM through a provider-agnostic `ModelAdapter`. FastAPI serves `/api/*` and the built React SPA from one container. SQLite stores runs, LLM usage, leads, and harness batches. An offline evaluation harness runs 15×3=45 identical `Pipeline.run()` calls and writes JSON/Markdown reports; three adversarial enquiries run separately. Assessors can also start harness jobs from the **Harness Testing** UI.
+During this exercise, I built a lead enquiry processing system that combines LLM reasoning with deterministic business logic. Users can submit a natural language enquiry through a React frontend, which is processed by a FastAPI backend. A Planner first decides which tools should be used, after which the Executor extracts structured information, applies jurisdiction rules, calculates a lead score, and only stores the result after it has been independently verified.
 
-## What I measured
+To improve reliability, the system includes a separate Verifier that checks whether the extracted information is actually supported by the original enquiry instead of simply trusting the previous LLM output. If verification fails, a single repair attempt is made before the run is quarantined. Every run records the execution plan, tool trace, verifier decision, latency, token usage, and cost for later inspection.
 
-Harness metrics from persisted rows: completion/error/quarantine rates, fabrication rate (verifier-reported), tool-selection accuracy vs plan, repair success rate, mean/median/p95 latency, mean tokens and cost, and run-to-run variance by `enquiry_id`. Schema-breach rates and true fabrication-caught rate are reported as `None` with honesty notes where the contracts cannot observe first-attempt adapter retries or ground-truth fabrications without extending immutable interfaces.
+## What I Measured
 
-## Live URL check
+I also implemented an evaluation harness that runs the same production pipeline against predefined datasets, adversarial samples, or custom enquiries. The harness measures completion and quarantine rates, repair outcomes, latency, token usage, cost, verifier results, and other execution statistics. These metrics are stored and displayed through the Harness Testing dashboard to make testing repeatable and transparent.
 
-After deploy to Render (single Docker Web Service, health `/api/health`, no login):
+## Live URL Verification
 
-1. Open the public URL on a phone hotspot (or other network not used to develop).
-2. Confirm the SPA loads and `GET /api/health` returns `{"status":"ok"}`.
-3. Submit a short fictional enquiry on the Run tab; confirm plan, tool trace, record, verifier decision, and cost panels populate.
-4. Note the URL, timestamp, and network used here before submission.
+The application was deployed publicly on Render as separate frontend and backend services:
 
-| Field | Value |
-| --- | --- |
-| **Public URL** | _(fill after Render deploy)_ |
-| **Checked from** | _(device / network)_ |
-| **Checked at** | _(UTC timestamp)_ |
+- **Frontend:** https://trial-brief-lead-enquiry-agent-client.onrender.com
+- **Backend:** https://trial-brief-lead-enquiry-agent.onrender.com
+
+To confirm the deployment worked outside my development environment, I accessed the application using my mobile phone over a cellular data connection rather than my home network. The frontend loaded successfully, the backend health endpoint responded correctly, and I completed a full end-to-end test by submitting a fictional enquiry and confirming that the execution plan, tool trace, verifier decision, and final record were generated correctly.
