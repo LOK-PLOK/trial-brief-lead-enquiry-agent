@@ -131,17 +131,32 @@ is a bug, not something to reproduce.
   Returning `Exploratory` is CONTRADICTED.
 - "Need it this week" → `Immediate` is SUPPORTED; `Exploratory` is
   CONTRADICTED.
+- "Before the end of the year" / "by year end" / any other bare calendar
+  deadline with no further anchor in the text → `Within three months` is
+  SUPPORTED (`Immediate` may also be reasonable). You have no way to know
+  today's actual date, so do NOT reason about how many months away "the
+  end of the year" really is, and do NOT contradict either of those two
+  extractions on that basis — a stated-but-unanchored calendar deadline
+  defaults to `Within three months`, exactly as the extractor is
+  instructed to. `Exploratory` would need its own explicit no-rush
+  language attached to that same deadline (e.g. "before the end of the
+  year, but no particular rush") to be SUPPORTED instead — a bare calendar
+  deadline alone does not support `Exploratory`.
 
 #### Worked budget_band examples (official USD thresholds)
 
 Official bands, by approximate USD value: `A` under 10,000; `B` 10,000 to
 49,999; `C` 50,000 to 249,999; `D` 250,000 and above. When the enquiry is
 in a non-USD currency, convert approximately before judging the band —
-use the SAME rounded factors given to the extractor: GBP ×1.275,
-EUR ×1.075, AUD ×0.675, CAD ×0.725, SGD ×0.745, NZD ×0.6, THB ÷35. Reason
-approximately (which band the converted amount falls in), never compute
-an exact number. If the currency is one you cannot approximate at all,
-`Unknown` is SUPPORTED and should not be penalized.
+use the SAME rough, rounded ranges given to the extractor: GBP ~1.25-1.3,
+EUR ~1.05-1.1, AUD ~0.65-0.7, CAD ~0.7-0.75, SGD ~0.74-0.75, NZD ~0.6,
+THB ÷33-36. Reason approximately (which band the converted amount falls
+in), never compute an exact number, and treat a case where the low and
+high ends of that approximate range land in two different official bands
+as genuinely ambiguous (both adjacent bands SUPPORTED, neither
+CONTRADICTED) rather than picking one side of the range and contradicting
+the other. If the currency is one you cannot approximate at all, `Unknown`
+is SUPPORTED and should not be penalized.
 
 - "CAD 25–40k" / "mid-range cask" → converts to roughly USD 18k–29k →
   `B` is SUPPORTED.
@@ -151,24 +166,44 @@ an exact number. If the currency is one you cannot approximate at all,
   looks large — it is the converted USD value that determines the band.
 - "approximately £95,000" / "£95,000" → converts to roughly USD 121,000 →
   `C` is SUPPORTED; extracted `B` is CONTRADICTED (band violation).
+- "GBP 40,000" → converts to roughly USD 50,000-52,000, i.e. band `C`;
+  do not be misled by the bare digits "40,000" looking like a band `B`
+  amount in isolation — the currency conversion is what decides the band.
 - "low six figures" → roughly USD 100k–199k → `C` is SUPPORTED.
 - "high six figures" → roughly USD 500k–999k → `D` is SUPPORTED.
+- An enquiry with more than one monetary figure (e.g. a stated ceiling plus a
+  separate product price, a past purchase someone else made, or a
+  comparison/hypothetical figure): judge support against the figure the
+  enquirer states as their OWN intended spend/ceiling for this purchase,
+  never the largest figure present. A product price, historical example, or
+  aspirational figure is not itself the customer's budget.
 
 Do NOT treat planner placeholders as the "correct" extraction.
 
 #### Worked asset_interest examples (support check only)
 
+This is a whisky cask investment company, so a customer's own bare
+"cask"/"casks" (cask ownership, cask investment, "buy a cask") is that
+company's own everyday term for its whisky product — it is itself a
+`Whisky cask` signal, not an absence of signal, unless the enquiry pairs
+that same "cask" reference with a different spirit/asset.
+
 - "whisky cask" / "Scotch" / "Speyside" / "single malt" → `Whisky cask`
   is SUPPORTED.
+- "casks" / "cask investment" / "a first cask" with no other spirit named
+  → `Whisky cask` is SUPPORTED (generic cask language defaults to this
+  company's own whisky product); `Unspecified` is also a reasonable,
+  more conservative reading and is likewise SUPPORTED — do not
+  CONTRADICT either one from a bare, unattached cask reference alone.
 - "tequila barrel" / "tequila" → `Tequila barrel` is SUPPORTED.
 - "wine" / "vintage wine" → `Wine` is SUPPORTED.
 - Enquiry names two or more distinct asset types (e.g. whisky AND
   tequila) → `Multiple` is SUPPORTED.
 - Enquiry names one specific asset type but the extraction is
   `Unspecified` → CONTRADICTED (a specific type was clearly named).
-- Enquiry gives no signal of any specific asset type at all →
-  `Unspecified` is SUPPORTED; a specific type would be unsupported
-  speculation.
+- Enquiry gives no signal about any asset type at all — no cask, barrel,
+  wine, spirit, region, or distillery mentioned anywhere → `Unspecified`
+  is SUPPORTED; a specific type would be unsupported speculation.
 
 Extracted fields include (under `final_record.extracted` and equivalents):
 - name, email, phone, country

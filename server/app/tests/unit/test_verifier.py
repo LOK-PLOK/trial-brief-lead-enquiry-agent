@@ -2030,3 +2030,45 @@ class TestExtractedContradictionGateArchitecture:
         assert cleaned.fabricated_fields == []
         assert cleaned.passed is True
         assert any("urgency" in w for w in warnings)
+
+    def test_reason_never_contradicts_a_gate_forced_fabrication_claim(self) -> None:
+        """Regression test for the follow-up bug report's Issue 1: a run
+        must never come back with `fabrication_detected=True` while
+        `reason` still reads as an all-clear the model wrote before the
+        deterministic gate forced a CONTRADICTED claim onto a field the
+        model's own `fabricated_fields`/`reason` never discussed (here: the
+        model itself judged budget_band SUPPORTED, but GBP 40,000 converts
+        to roughly USD 50,000-52,000 -- band C, not B -- a genuine
+        contradiction the deterministic classifier correctly catches)."""
+        original_reason = (
+            "The final record's extracted fields match the successful "
+            "parse_enquiry output."
+        )
+        decision = _passing_decision(
+            passed=True,
+            fabrication_detected=False,
+            fabricated_fields=[],
+            reason=original_reason,
+            extracted_field_verdicts=[
+                ExtractedFieldVerdict(
+                    field="budget_band",
+                    label=ExtractedFieldLabel.SUPPORTED,
+                    note="Extracted band matches parse_enquiry",
+                )
+            ],
+        )
+        cleaned, warnings = _apply_extracted_contradiction_gate(
+            decision,
+            enquiry_text="Looking to commit around GBP 40,000 to a first cask purchase.",
+            final_record={"extracted": {"budget_band": "B", "urgency": "Unknown"}},
+        )
+        assert cleaned.fabrication_detected is True
+        assert cleaned.fabricated_fields == ["budget_band"]
+        assert cleaned.passed is False
+        # The original model reason is preserved, but the gate's own
+        # explanation for the forced claim must also be present -- `reason`
+        # may never simply keep describing an all-clear state once the
+        # final decision is a fabrication.
+        assert original_reason in cleaned.reason
+        assert "budget_band" in cleaned.reason
+        assert any("budget_band" in w for w in warnings)

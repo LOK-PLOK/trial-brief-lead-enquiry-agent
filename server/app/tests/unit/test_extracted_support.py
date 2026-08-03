@@ -63,6 +63,14 @@ def test_classify_budget_band(enquiry: str, value: str, expected: ExtractedField
         ("ASAP please", "Immediate", SUPPORTED),
         ("ASAP please", "Exploratory", CONTRADICTED),
         ("Hi, interested in casks.", "Unknown", INSUFFICIENT),
+        # E11 flip-flop regression: a bare calendar deadline with no other
+        # anchor ("before the end of the year") must decisively SUPPORT
+        # Within three months / Immediate, and never depend on the
+        # Verifier LLM's own unguided guess about how far away that is.
+        ("I'd want to have it done before the end of the year.", "Within three months", SUPPORTED),
+        ("I'd want to have it done before the end of the year.", "Immediate", SUPPORTED),
+        ("I'd want to have it done before the end of the year.", "Exploratory", INSUFFICIENT),
+        ("Hoping to sort this out by year end, no rush though.", "Exploratory", SUPPORTED),
     ],
 )
 def test_classify_urgency(enquiry: str, value: str, expected: ExtractedFieldLabel) -> None:
@@ -91,6 +99,18 @@ def test_classify_urgency(enquiry: str, value: str, expected: ExtractedFieldLabe
         # Only one type mentioned but extractor said Multiple: not enough
         # evidence to call it a clear contradiction either way.
         ("Interested in a Scotch whisky cask.", "Multiple", INSUFFICIENT),
+        # Issue 2 fix: a bare, unattached "cask"/"casks" reference is this
+        # (whisky cask) company's own default term for its product, so it
+        # is itself a Whisky cask signal even with no whisky/region word.
+        ("I'd like to put money into casks this quarter.", "Whisky cask", SUPPORTED),
+        ("I would like information on cask investment please.", "Whisky cask", SUPPORTED),
+        # The soft generic-cask signal never CONTRADICTS Unspecified -- only
+        # a strongly-named spirit/region/distillery does that.
+        ("I would like information on cask investment please.", "Unspecified", INSUFFICIENT),
+        # A generic "cask" mention paired with a different, explicitly
+        # named spirit does NOT default to whisky.
+        ("I'd like to put money into a wine cask this quarter.", "Whisky cask", CONTRADICTED),
+        ("I'd like to put money into a wine cask this quarter.", "Wine", SUPPORTED),
     ],
 )
 def test_classify_asset_interest(enquiry: str, value: str, expected: ExtractedFieldLabel) -> None:

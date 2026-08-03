@@ -68,6 +68,18 @@ _MEDIUM_URGENCY_PHRASES: tuple[str, ...] = (
     "in the coming months",
     "coming months",
     "soon",
+    # Bare calendar deadlines with no further anchor (mirrors
+    # parse_enquiry_prompt.py/verifier_prompt.py's urgency guidance): the
+    # model -- and this classifier -- has no way to know today's actual
+    # date, so these default to "Within three months" rather than being
+    # left for the Verifier LLM to freelance a guess about how many months
+    # away "the end of the year" really is (root cause of run-to-run
+    # verifier flip-flopping on this exact phrase at temperature 0).
+    "end of the year",
+    "end of this year",
+    "by year end",
+    "before year end",
+    "before the new year",
 )
 
 # Amount patterns intentionally require a currency cue, a thousands comma,
@@ -394,12 +406,23 @@ _WHISKY_SIGNAL_WORDS: tuple[str, ...] = (
 _TEQUILA_SIGNAL_WORDS: tuple[str, ...] = ("tequila",)
 _WINE_SIGNAL_WORDS: tuple[str, ...] = ("wine",)
 
+# "cask" (this company's own everyday word for its whisky product, as
+# opposed to "barrel" for tequila -- mirrors parse_enquiry_prompt.py's
+# asset_interest guidance) is a deliberately SOFT signal, not a strong one
+# like the specific whisky words above: it only ever adds support for a
+# `Whisky cask` extraction (see classify_asset_interest), it never forces a
+# CONTRADICTED verdict against an `Unspecified` extraction the way a named
+# spirit/region/distillery does. A generic "cask" mention paired with a
+# different spirit (e.g. "wine cask") is not treated as a whisky signal.
+_GENERIC_CASK_WORDS: tuple[str, ...] = ("cask",)
+
 
 def _asset_signals_present(enquiry_text: str) -> set[str]:
     """Which official asset_interest categories the enquiry text itself
-    gives a keyword signal for. Returns a subset of {"whisky cask",
+    gives a strong keyword signal for. Returns a subset of {"whisky cask",
     "tequila barrel", "wine"} -- never "multiple" or "unspecified", which
-    are judgments about the signals, not signals themselves."""
+    are judgments about the signals, not signals themselves. Does not
+    include the soft generic-cask signal; see `_has_generic_cask_signal`."""
     text = (enquiry_text or "").lower()
     signals: set[str] = set()
     if any(word in text for word in _WHISKY_SIGNAL_WORDS):
@@ -409,6 +432,16 @@ def _asset_signals_present(enquiry_text: str) -> set[str]:
     if any(word in text for word in _WINE_SIGNAL_WORDS):
         signals.add("wine")
     return signals
+
+
+def _has_generic_cask_signal(enquiry_text: str, strong_signals: set[str]) -> bool:
+    """True when the enquiry mentions "cask(s)" generically -- with no
+    other, more specific spirit/asset already named for that enquiry (a
+    named spirit always takes precedence over the generic default)."""
+    if strong_signals:
+        return False
+    text = (enquiry_text or "").lower()
+    return any(word in text for word in _GENERIC_CASK_WORDS)
 
 
 def _asset_category_for_value(value: str) -> str | None:
@@ -443,6 +476,7 @@ def classify_asset_interest(enquiry_text: str, extracted_value: str | None) -> E
     """
     value = _normalize_enum(extracted_value)
     signals = _asset_signals_present(enquiry_text)
+    generic_cask = _has_generic_cask_signal(enquiry_text, signals)
 
     if value is None:
         return ExtractedFieldLabel.CONTRADICTED if signals else ExtractedFieldLabel.INSUFFICIENT_EVIDENCE
@@ -454,7 +488,9 @@ def classify_asset_interest(enquiry_text: str, extracted_value: str | None) -> E
 
     if category == "unspecified":
         # Unspecified is only fabricatable when the enquiry clearly names a
-        # specific asset type the parser should have picked up on.
+        # specific asset type the parser should have picked up on. A bare
+        # generic "cask" mention (no named spirit) is deliberately too soft
+        # to contradict Unspecified -- it only supports Whisky cask below.
         return ExtractedFieldLabel.CONTRADICTED if signals else ExtractedFieldLabel.INSUFFICIENT_EVIDENCE
 
     if category == "multiple":
@@ -466,6 +502,13 @@ def classify_asset_interest(enquiry_text: str, extracted_value: str | None) -> E
 
     # category is one of the three specific asset types.
     if category in signals:
+        return ExtractedFieldLabel.SUPPORTED
+    if category == "whisky cask" and generic_cask:
+        # This is a whisky cask investment company: a bare, unattached
+        # "cask"/"casks" reference is that company's own default term for
+        # its whisky product (mirrors parse_enquiry_prompt.py), so it
+        # supports a Whisky cask extraction even with no explicit
+        # whisky/region/distillery word present.
         return ExtractedFieldLabel.SUPPORTED
     if signals:
         # The enquiry names a different, specific asset type instead.

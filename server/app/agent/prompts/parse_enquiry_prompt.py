@@ -76,7 +76,11 @@ Only the resulting BAND matters -- never state a converted dollar figure in your
 and never let small differences in your approximate conversion change which band a
 clearly-mid-band amount falls into (a rough estimate is sufficient; do not agonize over
 amounts that sit near a boundary between two adjacent conversion estimates, pick the more
-likely band from context instead).
+likely band from context instead). Always perform the conversion before banding -- do not
+band a non-USD amount using its raw digits as if they were already USD just because the
+bare number happens to look like it sits inside a familiar band's range; the currency
+matters (e.g. GBP 40,000 converts to roughly USD 50,000-52,000, i.e. band C, even though
+"40,000" on its own looks like a band B amount).
 
 ### Other reading rules
 
@@ -92,28 +96,46 @@ likely band from context instead).
   199,999 (band C); "high six figures" ~= USD 500,000+ (band D); "a few hundred" ~=
   band A; "small"/"modest"/"start small" alone (no number) is insufficient on its own --
   look for an accompanying number before choosing a band over Unknown.
-- If an enquiry states more than one figure (e.g. a firm ceiling and a larger aspirational
-  item they are also curious about), classify budget_band using the enquirer's own stated
-  budget/ceiling for themselves, not a larger figure they mention only as something else
-  they noticed or someone else paid.
+- An enquiry can mention several monetary amounts that are NOT the customer's budget:
+  the price of a specific product/bottling/lot they are asking about, a figure someone
+  else (a broker, a relative, a friend) paid on a previous, separate purchase, a
+  comparison to something they saw elsewhere or a competitor's pricing, a hypothetical or
+  aspirational "might go up to" figure floated only as a possibility, or an illustrative/
+  marketing figure quoted back to them from your own materials. None of these is the
+  customer's budget by itself. When an enquiry states more than one figure, classify
+  budget_band using ONLY the amount the enquirer states as their own intended spend,
+  ceiling, or limit for this purchase -- never the largest number that appears anywhere in
+  the text. If every figure in the enquiry belongs to one of the other-amount categories
+  above and none is framed as the enquirer's own spending intention, budget_band is
+  Unknown; do not fall back to whichever figure is largest, most recent, or most precise.
 - If both a number and a qualitative cue appear, use the number. Qualitative language
   alone is enough when no number is given.
 
 ## asset_interest guidance
 
-This is a closed enum: Whisky cask | Tequila barrel | Wine | Multiple | Unspecified.
+This is a closed enum: Whisky cask | Tequila barrel | Wine | Multiple | Unspecified. You
+are extracting enquiries sent TO a whisky cask investment company, so its customers'
+default, unmarked way of describing its core product is simply "cask"/"casks" -- that
+word is not a neutral, spirit-agnostic term here, it is this company's own shorthand for
+its whisky product, the same way "barrel" is the enum's own term for the tequila product.
 
 - Whisky cask: the enquiry mentions whisky, Scotch, a whisky region or distillery (e.g.
-  Speyside, Islay, Springbank, Macallan, Glengoyne), a single malt, or an ex-bourbon
-  barrel used for whisky maturation.
-- Tequila barrel: the enquiry mentions tequila (barrels).
+  Speyside, Islay, Springbank, Macallan, Glengoyne), a single malt, an ex-bourbon barrel
+  used for whisky maturation, OR simply refers to investing in, buying, or owning a
+  "cask"/"casks" generically (cask ownership, cask investment, "buy a cask", "a first
+  cask") with no other spirit or asset type attached to that same reference. Generic cask
+  language defaults to this company's own product (whisky) unless the enquiry itself
+  pairs "cask" with a different spirit or asset (e.g. explicitly calls it a wine cask).
+- Tequila barrel: the enquiry mentions tequila, or explicitly names the container as a
+  "barrel" holding a spirit other than whisky.
 - Wine: the enquiry mentions wine.
 - Multiple: the enquiry clearly expresses present interest in more than one of the above
   asset types (not merely a passing mention of something the enquirer already owns and is
   not asking about).
-- Unspecified: ONLY when the enquiry gives no signal at all about which asset type
-  (e.g. it only says "cask investment" or "cask" with no whisky/tequila/wine cue), or when
-  the enquiry is entirely about the process/pricing with no asset type mentioned.
+- Unspecified: ONLY when the enquiry gives no signal about ANY asset type at all -- no
+  cask, barrel, wine, spirit, region, or distillery mentioned anywhere (for example, a
+  pure pricing/process question naming no product). A bare, unattached "cask"/"casks"
+  mention is itself a Whisky cask signal per the rule above, not grounds for Unspecified.
 
 Never return free text for this field, and never invent a bottling, region, or spirit
 type that is not actually named or clearly implied in the enquiry text.
@@ -128,9 +150,15 @@ Map time-sensitivity language into a band. Negations matter.
   same-month/imminent hard deadline (e.g. funds sitting idle, an event happening very
   soon that the purchase must precede).
 - Within three months: a concrete timeframe of roughly one to three months -- "within
-  the next few weeks", "this quarter", "before [an event ~2-3 months away]", "before the
-  end of the year" when that is clearly a few months out, "settled well before then" when
-  "then" is a few months away.
+  the next few weeks", "this quarter", "before [an event ~2-3 months away]", "settled
+  well before then" when "then" is a few months away. A stated calendar deadline that has
+  no further anchor in the enquiry text (e.g. "before the end of the year", "by year end",
+  "before the new year") also defaults to this band: you cannot know today's actual date,
+  so never try to judge how many months away "the end of the year" or a similar bare
+  calendar deadline really is -- treat any such deadline as a bounded-but-not-immediate
+  timeframe (this band) unless the enquiry separately attaches explicit near-term ("this
+  month", "ASAP", "urgently") or no-rush ("no rush", "someday", "just exploring") language
+  to that same deadline, in which case follow that explicit language instead.
 - Exploratory: explicit lack of urgency or an early research stage -- "no rush",
   "no particular hurry", "no great rush", "no timeline really, just exploring",
   "want to understand the market properly first", "just exploring", "just browsing",
@@ -186,7 +214,11 @@ def build_parse_enquiry_user_prompt(enquiry_text: str) -> str:
         "amounts using the approximate factors given (band thresholds are USD 10k / "
         "50k / 250k -> A / B / C / D), ignore hedging words like approximately/around/"
         "roughly/maybe when banding, and return only the exact enum values from the "
-        "closed lists (never low/medium/high, never free text). Use Unknown/Unspecified "
-        "only when evidence is genuinely insufficient.",
+        "closed lists (never low/medium/high, never free text). If more than one "
+        "monetary figure appears, band only the enquirer's own stated budget/ceiling for "
+        "this purchase, never a product price, past-purchase example, comparison, "
+        "hypothetical, or marketing figure. A bare 'cask'/'casks' mention with no other "
+        "spirit named defaults to Whisky cask. Use Unknown/Unspecified only when evidence "
+        "is genuinely insufficient.",
     ]
     return "\n".join(sections)

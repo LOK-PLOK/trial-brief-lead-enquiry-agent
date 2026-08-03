@@ -272,6 +272,18 @@ def _unique_preserve(items: list[str]) -> list[str]:
 # (`final_record.extracted` must match it); enquiry support for closed enums
 # is answered deterministically here.
 #
+# 4. `reason` consistency: step 3 can both ADD a fabrication claim the LLM
+#    never listed (deterministic CONTRADICTED overriding an LLM SUPPORTED)
+#    and CLEAR one it did list. Either way, the LLM's own `reason` text was
+#    written to justify its *original* claims -- if left untouched after an
+#    override, it can describe an all-clear ("extracted fields match
+#    parse_enquiry") while `fabrication_detected` is now true, which is a
+#    real state-consistency bug (the explanation contradicts the verdict it
+#    is attached to), not a fabrication call itself. The gate appends its
+#    own explanation to `reason` whenever it changes the outcome, in either
+#    direction, so `reason` always matches the final `fabricated_fields` /
+#    `fabrication_detected` it is returned alongside.
+#
 # A secondary reason-text self-contradiction stripper remains below for
 # free-text fields where the LLM still only has `reason` + fabricated_fields.
 
@@ -415,6 +427,21 @@ def _apply_extracted_contradiction_gate(
                 "may fabricate; cleared non-contradicted extracted claims. "
                 + "; ".join(warnings[:5])
             )
+    elif fabrication_detected and warnings:
+        # The gate changed the claim set (e.g. a deterministic CONTRADICTED
+        # label forced a claim the model's own `fabricated_fields` never
+        # listed). The model's `reason` was written to justify its
+        # *original* claims and can otherwise still read as an all-clear
+        # ("extracted fields match parse_enquiry") even though the final
+        # `fabricated_fields`/`fabrication_detected` no longer are. Append
+        # the gate's own explanation so `reason` never contradicts the
+        # decision it is attached to -- this is a state-consistency fix
+        # only; it never changes which fields are (or aren't) fabricated.
+        updates["passed"] = False
+        prefix = f"{decision.reason.strip()} " if decision.reason and decision.reason.strip() else ""
+        updates["reason"] = (
+            f"{prefix}Extracted-field contradiction gate: " + "; ".join(warnings[:5])
+        )
 
     return decision.model_copy(update=updates), warnings
 
