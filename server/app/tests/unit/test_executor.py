@@ -467,7 +467,7 @@ class TestChainedArgResolution:
 
     def test_score_lead_receives_the_real_extracted_and_jurisdiction_rule_objects(self) -> None:
         calls_log: list[dict] = []
-        extracted = {"name": "Jane Doe", "budget_band": "high"}
+        extracted = {"name": "Jane Doe", "budget_band": "D"}
         jurisdiction_rule = {"country": "Singapore", "requires_disclaimer": True, "restricted": False}
         plan = _plan(
             _step(1, ToolName.PARSE_ENQUIRY, {"enquiry_text": ENQUIRY_TEXT}),

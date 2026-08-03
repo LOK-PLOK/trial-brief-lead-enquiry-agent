@@ -116,9 +116,9 @@ def _isolate_and_register_mocks() -> dict:
                 "email": "sam@example.com",
                 "phone": "+6591234567",
                 "country": "Singapore",
-                "budget_band": "medium",
-                "asset_interest": "casks",
-                "urgency": "high",
+                "budget_band": "B",
+                "asset_interest": "Whisky cask",
+                "urgency": "Immediate",
             }
         ),
         "lookup_jurisdiction_rule": _ok(

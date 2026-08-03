@@ -1366,8 +1366,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
         return verify(enquiry, _plan(*tools), trace, record, adapter)
 
     def test_olivia_hart_aud_120k_budget_contradiction_is_discarded(self) -> None:
-        """Example A: budget_band 'high' is CONTRADICTED because AUD 120,000
-        clearly falls into the high category -- self-contradictory."""
+        """Example A: budget_band 'C' is CONTRADICTED because AUD 120,000
+        clearly falls into that band -- self-contradictory."""
         decision = _passing_decision(
             passed=False,
             fabrication_detected=True,
@@ -1393,9 +1393,9 @@ class TestVerifierConsistencyValidatorEndToEnd:
         assert result.fabricated_fields == []
 
     def test_olivia_hart_urgency_contradiction_is_discarded(self) -> None:
-        """Example C: urgency 'high' is contradicted because the enquiry
+        """Example C: urgency 'Immediate' is contradicted because the enquiry
         says 'please call me urgently' -- the justification quotes a
-        known high-urgency signal for the exact value it disputes."""
+        known Immediate-urgency signal for the exact value it disputes."""
         decision = _passing_decision(
             passed=False,
             fabrication_detected=True,
@@ -1448,8 +1448,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
         assert result.fabricated_fields == []
 
     def test_e01_no_rush_at_all_self_contradiction_discarded(self) -> None:
-        """Example B: urgency 'low' is supported by 'No rush at all' but is
-        fabricated -- explicit affirm-then-fabricate contradiction."""
+        """Example B: urgency 'Exploratory' is supported by 'No rush at all'
+        but is fabricated -- explicit affirm-then-fabricate contradiction."""
         decision = _passing_decision(
             passed=False,
             fabrication_detected=True,
