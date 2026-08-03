@@ -178,7 +178,7 @@ Swagger equivalent: open `/docs` → **Try it out**.
 }
 ```
 
-Expect roughly: `budget_band=high`, `urgency=high`, score ~85, `final_status=completed`, lead inserted.
+Expect roughly: `budget_band=C` (AUD 120,000 ≈ USD 81,000–84,000, official band C is USD 50,000–249,999), `asset_interest=Whisky cask`, `urgency=Immediate` ("urgently"), score ~75 (30 budget + 30 urgency + 15 jurisdiction), `final_status=completed`, lead inserted.
 
 ### Example low-budget body
 
@@ -188,7 +188,7 @@ Expect roughly: `budget_band=high`, `urgency=high`, score ~85, `final_status=com
 }
 ```
 
-Expect roughly: `budget_band=low`, `urgency=low`, score ~25–30, prefer `completed`.
+Expect roughly: `budget_band=A` (under £5,000 ≈ under USD 6,500, official band A is under USD 10,000), `asset_interest=Whisky cask`, `urgency=Exploratory` ("no rush at all"), score ~30 (10 budget + 5 urgency + 15 jurisdiction), prefer `completed`.
 
 ### Example restricted jurisdiction (US)
 
@@ -214,17 +214,30 @@ Or: **Adversarial** tab → **Load into Run tab** → submit. Confirm the Planne
 
 ## 7. Representative manual scenarios
 
-| ID | Intent | Expectation (approx.) |
-| --- | --- | --- |
-| E01 | High AU (AUD 120k, urgent) | High budget/urgency; score ~85; completed |
-| E02 | Medium CA (CAD 25–40k, not urgent) | Medium budget; urgency low; completed |
-| E03 | Low UK (under £5k, no rush) | Low/low; score ~25–30; completed |
-| E07 | USA restricted | Restricted jurisdiction; completed with risk score 0 for that component |
-| E08 | Duplicate of E01 contacts | Duplicate write error; one lead |
-| E09 | Garbled / thin | Often quarantine or weak completed |
-| E10 | Missing email | No fabricated email preferred |
+The primary dataset is the 15 official Trial A enquiries (`evaluation/fixtures/enquiries.json`,
+wording verbatim from `docs/WCC_Trial_A_Enquiry_Samples.md`). A representative subset, with the
+official enum values each is expected to land on:
 
-Full scoring bands (deterministic once extracted): budget 40/25/10/0; urgency 30/15/5/0; jurisdiction 15 / 20 / 0 (restricted). Max **90**.
+| ID | Enquirer / country | Intent | Expectation (approx.) |
+| --- | --- | --- | --- |
+| E01 | Daniel Okafor, UK | GBP 40,000 Speyside cask, "within the next few weeks" | `budget_band=C` (~USD 50–52k), `urgency=Within three months`; score ~60; completed |
+| E03 | Hiroshi Tanaka, Japan | USD 300,000, "in no particular hurry" | `budget_band=D`, `urgency=Exploratory`; score ~60; completed |
+| E04 | Faizal, Malaysia | "how much? i am from malaysia", no email | Thin/garbled; `budget_band=Unknown`, `urgency=Unknown`; no fabricated email preferred; often weak completed |
+| E06 | Sam Reyes | "Interested. Tequila barrels." — one line, no budget/urgency | `asset_interest=Tequila barrel`; `budget_band=Unknown`, `urgency=Unknown`; completed with a sparse record |
+| E10 | Yusuf Al-Rashid, UAE | USD 150,000, "ready to proceed quickly, ideally this month" | `budget_band=C`, `urgency=Immediate`; score ~75; completed |
+| E12 | J.W. (no country given) | "low six figures", diversifying from wine into tequila | No country → exercises `lookup_jurisdiction_rule`'s missing/unknown-country handling; `asset_interest=Multiple` plausible (wine + tequila) |
+| E14 | Elena Volkova, Cyprus | EUR 250,000, "want to move fast... within the fortnight" | `budget_band=D` (~USD 262–275k), `urgency=Immediate`; score ~85 (near-max); completed |
+
+None of the 15 official enquiries is US- or China-based, so the `restricted=true` jurisdiction
+path (0 jurisdiction points, e.g. `United States` in `server/app/data/jurisdiction_rules.json`) is
+not exercised by the standard dataset — test it manually with a US-based enquiry body, or via the
+adversarial fixtures.
+
+Full scoring bands (deterministic once extracted — `server/app/tools/score_lead.py`): budget
+`D`=40 / `C`=30 / `B`=20 / `A`=10 / `Unknown`=0; urgency `Immediate`=30 / `Within three months`=15
+/ `Exploratory`=5 / `Unknown`=0; jurisdiction 15 (disclaimer required, not restricted — the common
+case for every rule in `jurisdiction_rules.json` including the default) / 20 (no disclaimer
+required — not currently reachable by any configured rule) / 0 (restricted). Max **90**.
 
 ---
 

@@ -165,7 +165,7 @@ to be LLM-backed internally, but that call is opaque to the Executor's control f
         "tool": "parse_enquiry",
         "args": { "enquiry_text": "..." },
         "status": "success",
-        "result": { "name": "Jane Doe", "email": "jane@example.com", "budget_band": "high" },
+        "result": { "name": "Jane Doe", "email": "jane@example.com", "budget_band": "D" },
         "error": null,
         "validation_errors": null,
         "latency_ms": 842.1,
@@ -264,7 +264,8 @@ fresh, stateless LLM call — never a self-check appended to a prior call.
   "fabricated_fields": [],
   "extracted_field_verdicts": [
     {"field": "urgency", "label": "SUPPORTED", "note": "No rush at all"},
-    {"field": "budget_band", "label": "SUPPORTED", "note": "AUD 120,000"}
+    {"field": "budget_band", "label": "SUPPORTED", "note": "AUD 120,000 (~USD 81,000)"},
+    {"field": "asset_interest", "label": "SUPPORTED", "note": "whisky casks"}
   ],
   "plan_deviation_detected": false,
   "deviation_details": null,
@@ -481,7 +482,7 @@ Output — `StructuredCompletionResponse` (dataclass):
 
 ```json
 {
-  "parsed": { "name": "Jane Doe", "email": "jane@example.com", "budget_band": "high" },
+  "parsed": { "name": "Jane Doe", "email": "jane@example.com", "budget_band": "D" },
   "raw_response": { "id": "chatcmpl-...", "usage": { "prompt_tokens": 210, "completion_tokens": 48 } },
   "prompt_tokens": 210,
   "completion_tokens": 48,
@@ -780,11 +781,11 @@ post-verify `write_record` call. Quarantined runs do not insert a lead.
   "email": "jane@example.com",
   "phone": "+65 5551234",
   "country": "Singapore",
-  "budget_band": "high",
-  "asset_interest": "single malt whisky casks",
-  "urgency": "medium",
-  "score": 78,
-  "score_breakdown": { "budget": 40, "urgency": 20, "jurisdiction_risk": 18 },
+  "budget_band": "D",
+  "asset_interest": "Whisky cask",
+  "urgency": "Immediate",
+  "score": 88,
+  "score_breakdown": { "budget": 40, "urgency": 30, "jurisdiction_risk": 18 },
   "jurisdiction_rule": { "country": "Singapore", "requires_disclaimer": true, "restricted": false, "handling_note": "..." },
   "status": "accepted",
   "source_run_id": "b2e1c4a0-...",
