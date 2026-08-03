@@ -87,7 +87,7 @@ The evaluation harness calls the **same** `Pipeline.run()` as the live API (`doc
 ### From the UI (recommended for assessors)
 
 1. Open **Harness Testing**.
-2. Choose a dataset: **Standard Evaluation**, **Manual Test Suite (E01–E14)**, **Adversarial**, **Custom upload / paste**, or **Single Enquiry**.
+2. Choose a dataset: **Official Trial A Dataset (E01–E15)**, **Manual Test Suite (E01–E14)**, **Adversarial**, **Custom upload / paste**, or **Single Enquiry**.
 3. Select **1×** or **3×** repeats (custom/single also support paste/upload of `.txt` / `.md` / `.csv` / `.json`).
 4. Click **Run harness** (or **Run enquiry** in single mode).
 5. Watch progress; open **Summary** for rates, cost, latency, pipeline health, charts, and the per-run table.
@@ -276,6 +276,6 @@ Full scoring bands (deterministic once extracted): budget 40/25/10/0; urgency 30
 1. Start backend and frontend (or Docker).  
 2. Run tab → submit Olivia Hart enquiry → show Plan, Tool Trace, Final Record.  
 3. History → newest run.  
-4. Harness Testing → Standard Evaluation **1×** → watch progress → Summary → open one run detail.  
+4. Harness Testing → Official Trial A Dataset (E01–E15) **1×** → watch progress → Summary → open one run detail.  
 5. Optional: Custom paste with `E01` / `E02` blocks to show parser preview.  
 6. Optional: Adversarial load → Run.

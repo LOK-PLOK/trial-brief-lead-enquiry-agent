@@ -118,7 +118,7 @@ evaluation/
   harness.py                    # drives 15 x 3 = 45 runs via Pipeline
   metrics.py                    # aggregate metric computation
   adversarial.py                # 3 adversarial cases, run + report
-  fixtures/enquiries.json        # 15 canonical enquiries (added Monday)
+  fixtures/enquiries.json        # Official Trial A Dataset (E01–E15)
   reports/<timestamp>.json       # committed harness output artifacts
 
 docs/

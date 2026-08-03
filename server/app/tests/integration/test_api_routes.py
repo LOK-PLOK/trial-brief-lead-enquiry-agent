@@ -371,7 +371,7 @@ class TestHarness:
             n_runs=1,
             config_snapshot={
                 "dataset_id": "standard",
-                "dataset_label": "Standard Evaluation",
+                "dataset_label": "Official Trial A Dataset (E01–E15)",
                 "n_repeats": 1,
             },
         )

@@ -67,7 +67,7 @@ docker run --env-file .env -p 8000:8000 lead-enquiry-agent
 ## Evaluation harness
 
 **From the UI (recommended for assessors):** open the **Harness Testing** tab, choose a dataset
-(Standard Evaluation, Manual E01–E14, Adversarial, Custom, or Single Enquiry), pick 1× or 3×
+(Official Trial A Dataset E01–E15, Manual E01–E14, Adversarial, Custom, or Single Enquiry), pick 1× or 3×
 repeats, and click **Run harness**. Progress, summary, charts, and per-run timelines appear in
 the browser. Plain-text / JSON / CSV upload is supported for custom datasets.
 

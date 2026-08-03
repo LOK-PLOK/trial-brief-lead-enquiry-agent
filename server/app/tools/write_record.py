@@ -94,7 +94,7 @@ class WriteRecordTool(Tool):
                     phone=args.extracted.phone,
                     country=args.extracted.country,
                     budget_band=args.extracted.budget_band.value,
-                    asset_interest=args.extracted.asset_interest,
+                    asset_interest=args.extracted.asset_interest.value,
                     urgency=args.extracted.urgency.value,
                     score=args.score.score,
                     score_breakdown=args.score.breakdown,

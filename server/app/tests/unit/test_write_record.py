@@ -28,9 +28,9 @@ VALID_EXTRACTED = {
     "email": "jane@example.com",
     "phone": "+65 5551234",
     "country": "Singapore",
-    "budget_band": "high",
-    "asset_interest": "single cask",
-    "urgency": "high",
+    "budget_band": "D",
+    "asset_interest": "Whisky cask",
+    "urgency": "Immediate",
 }
 
 

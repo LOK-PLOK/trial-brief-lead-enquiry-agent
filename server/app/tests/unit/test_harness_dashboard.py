@@ -71,7 +71,7 @@ def test_build_dashboard_statistics_and_health() -> None:
         started_at=datetime.now(UTC),
         finished_at=datetime.now(UTC),
         dataset_id="standard",
-        dataset_label="Standard Evaluation",
+        dataset_label="Official Trial A Dataset (E01–E15)",
         n_repeats=1,
         metrics=None,
         runs=runs,  # type: ignore[arg-type]

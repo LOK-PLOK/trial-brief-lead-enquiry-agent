@@ -18,7 +18,10 @@ def test_lists_standard_and_manual_datasets() -> None:
 def test_load_standard_has_15_enquiries() -> None:
     enquiries = datasets.load_dataset_enquiries("standard")
     assert len(enquiries) == 15
-    assert enquiries[0]["id"].startswith("enq-")
+    assert [row["id"] for row in enquiries] == [f"E{n:02d}" for n in range(1, 16)]
+    assert enquiries[0]["text"].startswith("Hello, my name is Daniel Okafor.")
+    info = datasets.get_dataset("standard")
+    assert info.label == "Official Trial A Dataset (E01–E15)"
 
 
 def test_load_manual_has_14_enquiries() -> None:

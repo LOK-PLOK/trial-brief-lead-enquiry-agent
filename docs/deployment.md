@@ -62,7 +62,7 @@ Vite proxies `/api` to the backend during local development. In production the b
 
 ### Evaluation harness
 
-Requires 15 enquiries in `evaluation/fixtures/enquiries.json` (brief §3.1). Stand-in fictional fixtures are present so the harness is runnable; replace with the official samples when supplied. The harness validates count by design rather than reporting empty metrics.
+Requires 15 enquiries in `evaluation/fixtures/enquiries.json` (brief §3.1). The Official Trial A Dataset (E01–E15) from `docs/WCC_Trial_A_Enquiry_Samples.md` is the primary fixture. The harness validates count by design rather than reporting empty metrics.
 
 ```bash
 # from repo root
@@ -174,4 +174,4 @@ Operational steps remaining for trial delivery (not code gaps):
 1. Set `OPENROUTER_API_KEY` and deploy the Docker image to Render (see above).
 2. Cold-network check of the public URL; fill URL/timestamp into [`proof_note.md`](proof_note.md).
 3. Run a live harness (UI **1× Standard** or CLI) and optionally adversarial; keep reports under `evaluation/reports/`.
-4. Replace stand-in enquiry fixtures with the official brief samples when supplied, then re-run for the reproducibility gate.
+4. Re-run the Official Trial A Dataset (E01–E15) harness for the reproducibility gate after deploy or model changes.

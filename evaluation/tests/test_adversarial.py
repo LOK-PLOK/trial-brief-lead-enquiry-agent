@@ -42,7 +42,7 @@ def _result(
     plan: Plan | None = None,
     final_status: str = "quarantined",
     passed: bool = False,
-    budget_band: BudgetBand = BudgetBand.MEDIUM,
+    budget_band: BudgetBand = BudgetBand.C,
 ) -> RunResult:
     record = LeadRecord(
         extracted=ExtractedFields(
@@ -51,7 +51,7 @@ def _result(
             phone="14155550199",
             country="United States",
             budget_band=budget_band,
-            urgency=Urgency.HIGH,
+            urgency=Urgency.IMMEDIATE,
         ),
         jurisdiction_rule={
             "country": "United States",

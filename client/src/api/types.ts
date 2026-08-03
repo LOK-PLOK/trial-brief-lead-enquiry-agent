@@ -7,6 +7,16 @@
 
 export type ToolName = 'parse_enquiry' | 'lookup_jurisdiction_rule' | 'score_lead' | 'write_record'
 
+/**
+ * Official Trial A field definitions (docs/WCC_Trial_A_Enquiry_Samples.md),
+ * mirrored from server/app/schemas/extraction.py's `BudgetBand` / `Urgency`
+ * / `AssetInterest` enums. These are the only valid values anywhere in the
+ * project -- prompts, tools, DB, API, and this frontend.
+ */
+export type BudgetBand = 'A' | 'B' | 'C' | 'D' | 'Unknown'
+export type Urgency = 'Immediate' | 'Within three months' | 'Exploratory' | 'Unknown'
+export type AssetInterest = 'Whisky cask' | 'Tequila barrel' | 'Wine' | 'Multiple' | 'Unspecified'
+
 export interface PlanStep {
   step: number
   tool: ToolName
@@ -275,9 +285,9 @@ export interface Lead {
   email: string | null
   phone: string | null
   country: string | null
-  budget_band: string | null
-  asset_interest: string | null
-  urgency: string | null
+  budget_band: BudgetBand | null
+  asset_interest: AssetInterest | null
+  urgency: Urgency | null
   score: number | null
   score_breakdown: Record<string, unknown> | null
   jurisdiction_rule: Record<string, unknown> | null

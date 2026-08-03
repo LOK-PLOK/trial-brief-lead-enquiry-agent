@@ -185,6 +185,8 @@ class TestBatchPersistence:
         assert "openai_api_key" not in batch.config_snapshot
         assert "anthropic_api_key" not in batch.config_snapshot
         assert "model_provider" in batch.config_snapshot
+        assert batch.config_snapshot["dataset_id"] == "standard"
+        assert batch.config_snapshot["dataset_label"] == "Official Trial A Dataset (E01–E15)"
 
 
 class TestHarnessExceptionCapture:

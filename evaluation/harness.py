@@ -119,12 +119,18 @@ def _config_snapshot(settings: Settings) -> dict[str, Any]:
     (docs/architecture.md section 5, `harness_batches.config_snapshot`).
     Deliberately excludes API keys/credentials -- this gets persisted to
     the database and to a JSON report file committed to the repo."""
+    from evaluation.datasets import DATASETS
+
+    standard = DATASETS["standard"]
     return {
         "model_provider": settings.model_provider.value,
         "model_name": settings.model_name,
         "planner_model": settings.planner_model,
         "extractor_model": settings.extractor_model,
         "verifier_model": settings.verifier_model,
+        "dataset_id": standard.id,
+        "dataset_label": standard.label,
+        "dataset_fixture": "evaluation/fixtures/enquiries.json",
     }
 
 
@@ -220,9 +226,9 @@ def run_harness(
     enquiries = enquiries if enquiries is not None else load_enquiries()
     if not enquiries:
         raise ValueError(
-            "No enquiries to run: evaluation/fixtures/enquiries.json is empty. The 15 real "
-            "enquiry samples must be supplied before the harness can run (see "
-            "docs/Trial_Brief_Paul_Detablan.md section 3.1)."
+            "No enquiries to run: evaluation/fixtures/enquiries.json is empty. "
+            "The Official Trial A Dataset (E01–E15) must be present "
+            "(docs/WCC_Trial_A_Enquiry_Samples.md)."
         )
     if expected_n_enquiries is not None and len(enquiries) != expected_n_enquiries:
         raise ValueError(
@@ -350,6 +356,7 @@ def _run_harness_with_session(
     metrics = compute_harness_metrics(db, batch.id)
     repository.finish_harness_batch(db, batch.id, metrics=metrics)
 
+    report_snapshot = batch.config_snapshot or _config_snapshot(settings)
     json_report_path = _write_json_report(
         batch_id=batch.id,
         n_enquiries=len(enquiries),
@@ -357,7 +364,7 @@ def _run_harness_with_session(
         n_runs_expected=n_runs_expected,
         n_runs_executed=n_executed,
         n_runs_skipped=n_skipped,
-        config_snapshot=_config_snapshot(settings),
+        config_snapshot=report_snapshot,
         metrics=metrics,
     )
     markdown_report_path = _write_markdown_report(
@@ -368,6 +375,7 @@ def _run_harness_with_session(
         n_runs_executed=n_executed,
         n_runs_skipped=n_skipped,
         metrics=metrics,
+        dataset_label=report_snapshot.get("dataset_label"),
     )
 
     if on_progress is not None:
@@ -439,6 +447,7 @@ def _write_markdown_report(
     n_runs_executed: int,
     n_runs_skipped: int,
     metrics: dict[str, Any],
+    dataset_label: str | None = None,
 ) -> Path:
     """Human-readable counterpart to the JSON report -- what a reviewer
     actually reads, per docs/Trial_Brief_Paul_Detablan.md's proof-note
@@ -453,6 +462,10 @@ def _write_markdown_report(
         "",
         f"**Harness batch:** `{batch_id}`  ",
         f"**Generated:** {datetime.now(UTC).isoformat()}  ",
+    ]
+    if dataset_label:
+        lines.append(f"**Dataset:** {dataset_label}  ")
+    lines += [
         f"**Runs:** {n_runs_executed} executed, {n_runs_skipped} skipped (resumed), "
         f"{n_runs_expected} expected ({n_enquiries} enquiries x {n_repeats} repeats)",
         "",

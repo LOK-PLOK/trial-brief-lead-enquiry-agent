@@ -26,8 +26,11 @@ class DatasetInfo:
 DATASETS: dict[str, DatasetInfo] = {
     "standard": DatasetInfo(
         id="standard",
-        label="Standard Evaluation",
-        description="Brief harness set: enq-01 … enq-15 (evaluation/fixtures/enquiries.json).",
+        label="Official Trial A Dataset (E01–E15)",
+        description=(
+            "Official WCC-TRIAL-A enquiry samples E01–E15 "
+            "(docs/WCC_Trial_A_Enquiry_Samples.md → evaluation/fixtures/enquiries.json)."
+        ),
         n_enquiries=15,
         default_repeats=1,
         path=_FIXTURES / "enquiries.json",

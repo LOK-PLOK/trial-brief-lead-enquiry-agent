@@ -51,7 +51,7 @@ def test_start_assigns_batch_id_before_thread_runs(
 
     job = isolated_manager.start(
         dataset_id="standard",
-        dataset_label="Standard Evaluation",
+        dataset_label="Official Trial A Dataset (E01–E15)",
         enquiries=[{"id": "e1", "text": "hello"}],
         n_repeats=1,
     )
@@ -60,7 +60,7 @@ def test_start_assigns_batch_id_before_thread_runs(
     batch = repository.get_harness_batch(db_session, job.batch_id)
     assert batch is not None
     assert batch.config_snapshot["dataset_id"] == "standard"
-    assert batch.config_snapshot["dataset_label"] == "Standard Evaluation"
+    assert batch.config_snapshot["dataset_label"] == "Official Trial A Dataset (E01–E15)"
     assert batch.finished_at is None
 
     assert started.wait(timeout=2)

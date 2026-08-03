@@ -9,10 +9,19 @@ Scoring rules (fully documented here, not just in code comments, since this
 is a fictional business rule this trial invented rather than a real
 underwriting model):
 
-- `budget` (0-40 points): the enquirer's stated/inferred budget band.
-    high -> 40, medium -> 25, low -> 10, unknown -> 0.
-- `urgency` (0-30 points): how time-sensitive the enquiry reads.
-    high -> 30, medium -> 15, low -> 5, unknown -> 0.
+- `budget` (0-40 points): the enquirer's stated/inferred official Trial A
+  budget band (docs/WCC_Trial_A_Enquiry_Samples.md).
+    D (>= USD 250,000) -> 40, C (USD 50,000-249,999) -> 30,
+    B (USD 10,000-49,999) -> 20, A (< USD 10,000) -> 10, Unknown -> 0.
+  Four evenly-spaced tiers replace the prior three-tier low/medium/high
+  table one-for-one on enum migration -- same 0-40 range, same "higher
+  band -> higher points, Unknown -> 0" shape, no scoring redesign.
+- `urgency` (0-30 points): how time-sensitive the enquiry reads, using the
+  official Trial A urgency band.
+    Immediate -> 30, Within three months -> 15, Exploratory -> 5,
+    Unknown -> 0. A direct one-for-one rename of the prior
+    high/medium/low points (Immediate=high, Within three months=medium,
+    Exploratory=low) -- same point values, same formula.
 - `jurisdiction_risk` (0-20 points): how favorable the enquirer's
   jurisdiction is for processing this lead without extra compliance
   overhead (higher is better -- a *low*-risk jurisdiction earns more
@@ -39,16 +48,17 @@ from app.tools.base import Tool, ToolResult
 from app.tools.lookup_jurisdiction_rule import JurisdictionRule
 
 _BUDGET_POINTS: dict[BudgetBand, int] = {
-    BudgetBand.HIGH: 40,
-    BudgetBand.MEDIUM: 25,
-    BudgetBand.LOW: 10,
+    BudgetBand.D: 40,
+    BudgetBand.C: 30,
+    BudgetBand.B: 20,
+    BudgetBand.A: 10,
     BudgetBand.UNKNOWN: 0,
 }
 
 _URGENCY_POINTS: dict[Urgency, int] = {
-    Urgency.HIGH: 30,
-    Urgency.MEDIUM: 15,
-    Urgency.LOW: 5,
+    Urgency.IMMEDIATE: 30,
+    Urgency.WITHIN_THREE_MONTHS: 15,
+    Urgency.EXPLORATORY: 5,
     Urgency.UNKNOWN: 0,
 }
 

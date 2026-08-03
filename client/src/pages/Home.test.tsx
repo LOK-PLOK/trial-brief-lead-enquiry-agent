@@ -133,7 +133,7 @@ describe('Home', () => {
         return jsonResponse([
           {
             id: 'standard',
-            label: 'Standard Evaluation',
+            label: 'Official Trial A Dataset (E01–E15)',
             description: '15 enquiries',
             n_enquiries: 15,
             default_repeats: 1,
@@ -175,7 +175,7 @@ describe('Home', () => {
     await user.click(screen.getByRole('button', { name: 'Harness Testing' }))
 
     expect(await screen.findByRole('button', { name: 'Run harness' })).toBeInTheDocument()
-    expect(await screen.findByText('Standard Evaluation')).toBeInTheDocument()
+    expect(await screen.findByText('Official Trial A Dataset (E01–E15)')).toBeInTheDocument()
     expect(
       await screen.findByText(/Run evaluation datasets from the browser/),
     ).toBeInTheDocument()
