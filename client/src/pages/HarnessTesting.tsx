@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  invalidatePipelineResultQueries,
   useCancelHarnessJob,
   useHarnessDashboard,
   useHarnessDatasets,
@@ -83,6 +84,9 @@ export function HarnessTesting() {
     setView('summary')
     void queryClient.invalidateQueries({ queryKey: ['harness', 'dashboard', job.batch_id] })
     void queryClient.invalidateQueries({ queryKey: ['harness', 'summary'] })
+    // Harness runs Pipeline per enquiry and may persist leads; History / Leads
+    // stay cached otherwise until a hard reload (useRuns is always mounted).
+    invalidatePipelineResultQueries(queryClient)
   }, [job?.status, job?.batch_id, queryClient])
 
   // Prefill summary with latest batch when opening the tab with no active job.

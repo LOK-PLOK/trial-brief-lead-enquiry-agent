@@ -113,6 +113,82 @@ describe('Home', () => {
     expect(screen.getByText('Final Record')).toBeInTheDocument()
   })
 
+  it('refreshes History leads after a successful Run without a browser reload', async () => {
+    const completedRun = {
+      id: 'run-fresh',
+      enquiry_text: 'Hi, interested in casks.',
+      enquiry_id: null,
+      repeat_index: null,
+      is_adversarial: false,
+      plan: { steps: [] },
+      plan_schema_valid: true,
+      tool_call_trace: { calls: [] },
+      final_record: null,
+      verifier_decision: null,
+      repair_attempted: false,
+      repair_succeeded: null,
+      final_status: 'completed' as const,
+      llm_calls: [],
+      total_tokens: 0,
+      total_cost_usd: 0.001,
+      total_latency_ms: 100,
+      created_at: null,
+    }
+    const newLead = {
+      id: 'lead-1',
+      dedupe_hash: 'abc',
+      name: 'Fresh Lead',
+      email: 'fresh@example.com',
+      phone: null,
+      country: 'UK',
+      budget_band: 'B',
+      asset_interest: 'Whisky cask',
+      urgency: 'Immediate',
+      score: 50,
+      score_breakdown: null,
+      jurisdiction_rule: null,
+      status: 'accepted' as const,
+      source_run_id: 'run-fresh',
+      created_at: null,
+    }
+
+    let leadsAfterRun = false
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.includes('/api/leads')) {
+        return jsonResponse(leadsAfterRun ? [newLead] : [])
+      }
+      if (url.includes('/api/runs') && init?.method === 'POST') {
+        leadsAfterRun = true
+        return jsonResponse(completedRun)
+      }
+      if (url.match(/\/api\/runs\/[^/?]+$/)) {
+        return jsonResponse(completedRun)
+      }
+      if (url.includes('/api/runs')) {
+        return jsonResponse(leadsAfterRun ? [completedRun] : [])
+      }
+      return jsonResponse({ detail: 'Not implemented yet.' }, 501)
+    })
+
+    const user = userEvent.setup()
+    renderWithQueryClient(<Home />)
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    expect(await screen.findByText('No leads yet.')).toBeInTheDocument()
+
+    // History unmounts the submit button; the remaining "Run" control is the tab.
+    await user.click(screen.getByRole('button', { name: 'Run' }))
+    await user.type(screen.getByPlaceholderText('Paste an enquiry...'), 'Hi, interested in casks.')
+    await user.click(getSubmitButton())
+    expect(await screen.findByText('Plan')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'History' }))
+    expect(await screen.findByText('Fresh Lead')).toBeInTheDocument()
+    expect(screen.getByText('accepted')).toBeInTheDocument()
+    expect(screen.queryByText('No leads yet.')).not.toBeInTheDocument()
+  })
+
   it('loading an adversarial sample switches to the Run tab and fills the textarea', async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ detail: 'Not implemented yet.' }, 501))
     const user = userEvent.setup()

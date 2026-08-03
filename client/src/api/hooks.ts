@@ -7,12 +7,27 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as api from './client'
 
+/**
+ * Mark every query that surfaces pipeline side-effects as stale.
+ *
+ * A successful Run or Harness job can write leads and append runs. History /
+ * Leads are driven by `['runs']` and `['leads', …]`; without invalidating
+ * them React Query keeps serving the pre-run cache until a hard reload.
+ * Prefix match (no `exact`) covers `['runs', runId]` and filtered leads.
+ */
+export function invalidatePipelineResultQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+) {
+  void queryClient.invalidateQueries({ queryKey: ['runs'] })
+  void queryClient.invalidateQueries({ queryKey: ['leads'] })
+}
+
 export function useCreateRun() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: api.createRun,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['runs'] })
+      invalidatePipelineResultQueries(queryClient)
     },
   })
 }
