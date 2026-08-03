@@ -256,7 +256,8 @@ def _unique_preserve(items: list[str]) -> list[str]:
 #    CONTRADICTED / INSUFFICIENT_EVIDENCE) — classify support, do not
 #    re-extract.
 # 2. Deterministic closed-enum classifier (`extracted_support.py`) independently
-#    labels budget_band / urgency from enquiry + chosen value.
+#    labels budget_band / urgency / asset_interest from enquiry + chosen
+#    value.
 # 3. This gate rebuilds extracted fabrication claims: ONLY CONTRADICTED may
 #    enter `fabricated_fields`. SUPPORTED and INSUFFICIENT_EVIDENCE never do.
 #    Deterministic SUPPORTED wins over an LLM CONTRADICTED (fail-open toward
@@ -274,7 +275,7 @@ def _unique_preserve(items: list[str]) -> list[str]:
 # A secondary reason-text self-contradiction stripper remains below for
 # free-text fields where the LLM still only has `reason` + fabricated_fields.
 
-_CLOSED_ENUM_FIELDS: frozenset[str] = frozenset({"budget_band", "urgency"})
+_CLOSED_ENUM_FIELDS: frozenset[str] = frozenset({"budget_band", "urgency", "asset_interest"})
 
 
 def _extracted_token(name: str) -> str:
@@ -446,15 +447,15 @@ _AFFIRMING_TERMS: tuple[str, ...] = (
 )
 
 # Mirrors the worked urgency examples already documented in
-# agent/prompts/verifier_prompt.py ("ASAP"/"urgently" -> high; "not
-# urgent"/"no rush" -> low). Used only to sanity-check whether the
+# agent/prompts/verifier_prompt.py ("ASAP"/"urgently" -> Immediate; "not
+# urgent"/"no rush" -> Exploratory). Used only to sanity-check whether the
 # verifier's OWN justification quotes a phrase that is itself a signal for
 # the exact value it just contradicted -- this is not a re-implementation
 # of parse_enquiry's extraction logic, and it never assigns or changes a
 # field's value, only whether a fabrication claim about it may be trusted.
 _URGENCY_SIGNAL_PHRASES: dict[str, tuple[str, ...]] = {
-    "high": ("asap", "urgently", "immediately", "right away", "as soon as possible"),
-    "low": ("not urgent", "no rush", "someday", "whenever convenient", "just browsing"),
+    "immediate": ("asap", "urgently", "immediately", "right away", "as soon as possible"),
+    "exploratory": ("not urgent", "no rush", "someday", "whenever convenient", "just browsing"),
 }
 
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[.;!?])\s+|\s+\bbut\b\s+|\s+\bhowever\b\s+|\s+\byet\b\s+", re.IGNORECASE)

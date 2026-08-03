@@ -53,9 +53,9 @@ PARSE_RESULT = {
     "email": "jane@example.com",
     "phone": None,
     "country": "Singapore",
-    "budget_band": "high",
+    "budget_band": "C",
     "asset_interest": "whisky casks",
-    "urgency": "medium",
+    "urgency": "Within three months",
 }
 
 WRITE_RESULT = {
@@ -731,7 +731,7 @@ class TestVerifierPromptExtractedVsDerived:
         assert "next few months (not urgent)" in prompt
         assert "Within 30 days" in prompt or "within 30 days" in prompt
         assert "ASAP" in prompt
-        assert "Returning `low` is CONTRADICTED" in prompt or "low` is CONTRADICTED" in prompt
+        assert "Returning `Exploratory` is CONTRADICTED" in prompt or "Exploratory` is CONTRADICTED" in prompt
 
     def test_user_prompt_reminds_support_framework(self) -> None:
         text = verifier_prompt.build_verifier_user_prompt("hi", {"steps": []}, {"calls": []}, {})
@@ -757,7 +757,7 @@ class TestVerifierPromptExtractedVsDerived:
                         "step": 3,
                         "tool": "score_lead",
                         "args": {
-                            "extracted": {"budget_band": "unknown", "urgency": "unknown"},
+                            "extracted": {"budget_band": "Unknown", "urgency": "Unknown"},
                             "jurisdiction_rule": {"handling_note": ""},
                         },
                         "rationale": "y",
@@ -770,13 +770,13 @@ class TestVerifierPromptExtractedVsDerived:
         assert "parse_enquiry" in text
         assert "Never use planner placeholders" in text or "non-authoritative" in text.lower()
         assert "dedupe_hash" in text
-        assert '"budget_band": "unknown"' not in text
-        assert '"urgency": "unknown"' not in text
+        assert '"budget_band": "Unknown"' not in text
+        assert '"urgency": "Unknown"' not in text
         assert '"_redacted"' in text
 
 
 class TestManualEnquiryUrgencySupportPasses:
-    """E01 / E02 / E10 style: parser urgency=low is SUPPORTED → PASS.
+    """E01 / E02 / E10 style: parser urgency=Exploratory is SUPPORTED → PASS.
     Prompt must encode the support framework; verify() pass-through when
     the LLM follows it (scripted). Deterministic checks unchanged.
     """
@@ -786,7 +786,7 @@ class TestManualEnquiryUrgencySupportPasses:
         enquiry: str,
         *,
         urgency: str,
-        budget_band: str = "high",
+        budget_band: str = "C",
         name: str = "Test Lead",
         email: str = "test@example.com",
         country: str = "Australia",
@@ -800,8 +800,8 @@ class TestManualEnquiryUrgencySupportPasses:
             "asset_interest": "whisky casks",
             "urgency": urgency,
         }
-        urgency_pts = {"low": 5, "medium": 15, "high": 30, "unknown": 0}[urgency]
-        budget_pts = {"low": 10, "medium": 25, "high": 40, "unknown": 0}[budget_band]
+        urgency_pts = {"Exploratory": 5, "Within three months": 15, "Immediate": 30, "Unknown": 0}[urgency]
+        budget_pts = {"A": 10, "B": 20, "C": 30, "D": 40, "Unknown": 0}[budget_band]
         breakdown = {
             "budget": budget_pts,
             "urgency": urgency_pts,
@@ -831,11 +831,11 @@ class TestManualEnquiryUrgencySupportPasses:
         return verify(enquiry, _plan(*tools), trace, record, adapter)
 
     def test_e01_no_rush_at_all_low_passes(self) -> None:
-        # Manual E01-style support path: "No rush at all" → urgency=low SUPPORTED.
+        # Manual E01-style support path: "No rush at all" → urgency=Exploratory SUPPORTED.
         decision = self._verify(
             "Just browsing — maybe a small cask under £5,000 someday. No rush at all.",
-            urgency="low",
-            budget_band="low",
+            urgency="Exploratory",
+            budget_band="A",
             name="Priya Nair",
             email="priya.nair@example.co.uk",
             country="United Kingdom",
@@ -855,8 +855,8 @@ class TestManualEnquiryUrgencySupportPasses:
         )
         decision = self._verify(
             enquiry,
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="B",
             name="Noah Berger",
             email="noah.berger@example.ca",
             country="Canada",
@@ -865,7 +865,7 @@ class TestManualEnquiryUrgencySupportPasses:
         assert decision.fabrication_detected is False
         prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
         assert "next few months (not urgent)" in prompt
-        assert "medium may also be reasonable" in prompt
+        assert "Within three months` may also be reasonable" in prompt
 
     def test_e10_not_urgent_low_passes(self) -> None:
         enquiry = (
@@ -875,8 +875,8 @@ class TestManualEnquiryUrgencySupportPasses:
         )
         decision = self._verify(
             enquiry,
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="C",
             name="Daniel Okonkwo",
             email="unused@example.com",
             country="Nigeria",
@@ -893,13 +893,13 @@ class TestManualEnquiryUrgencySupportPasses:
         user = verifier_prompt.build_verifier_user_prompt("x", {"steps": []}, {"calls": []}, {})
         assert "Only CONTRADICTED may appear in fabricated_fields" in user
 
-    def test_e06_medium_for_95k_remains_contradicted_in_prompt(self) -> None:
-        """E06: medium for £95k is CONTRADICTED by thresholds — not preference."""
+    def test_e06_band_b_for_95k_remains_contradicted_in_prompt(self) -> None:
+        """E06: B for £95k (~USD 121k) is CONTRADICTED by thresholds — not preference."""
         prompt = verifier_prompt.VERIFIER_SYSTEM_PROMPT
         assert "£95,000" in prompt or "95,000" in prompt
         assert "CONTRADICTED" in prompt
-        assert "70k" in prompt or "70,000" in prompt
-        assert "medium" in prompt.lower()
+        assert "50,000" in prompt or "50k" in prompt
+        assert "`B`" in prompt or "`C`" in prompt
 
 
 class TestUrgencySupportedEnumPasses:
@@ -910,7 +910,7 @@ class TestUrgencySupportedEnumPasses:
         enquiry: str,
         *,
         urgency: str,
-        budget_band: str = "unknown",
+        budget_band: str = "Unknown",
     ) -> VerifierDecision:
         parse = {
             "name": "Test Lead",
@@ -934,10 +934,10 @@ class TestUrgencySupportedEnumPasses:
             ToolName.SCORE_LEAD,
         )
         breakdown = {
-            "low": {"budget": 0, "urgency": 5, "jurisdiction_risk": 15},
-            "medium": {"budget": 0, "urgency": 15, "jurisdiction_risk": 15},
-            "high": {"budget": 0, "urgency": 30, "jurisdiction_risk": 15},
-            "unknown": {"budget": 0, "urgency": 0, "jurisdiction_risk": 15},
+            "Exploratory": {"budget": 0, "urgency": 5, "jurisdiction_risk": 15},
+            "Within three months": {"budget": 0, "urgency": 15, "jurisdiction_risk": 15},
+            "Immediate": {"budget": 0, "urgency": 30, "jurisdiction_risk": 15},
+            "Unknown": {"budget": 0, "urgency": 0, "jurisdiction_risk": 15},
         }[urgency]
         record["score_breakdown"] = breakdown
         record["score"] = sum(breakdown.values())
@@ -953,28 +953,28 @@ class TestUrgencySupportedEnumPasses:
         return verify(enquiry, _plan(*tools), trace, record, adapter)
 
     def test_not_urgent_to_low_passes(self) -> None:
-        decision = self._verify_urgency("Please call when you can. Not urgent.", urgency="low")
+        decision = self._verify_urgency("Please call when you can. Not urgent.", urgency="Exploratory")
         assert decision.passed is True
         assert decision.fabrication_detected is False
 
     def test_no_rush_to_low_passes(self) -> None:
-        decision = self._verify_urgency("Interested in a cask. No rush.", urgency="low")
+        decision = self._verify_urgency("Interested in a cask. No rush.", urgency="Exploratory")
         assert decision.passed is True
         assert decision.fabrication_detected is False
 
     def test_someday_to_low_passes(self) -> None:
-        decision = self._verify_urgency("Maybe a cask someday.", urgency="low")
+        decision = self._verify_urgency("Maybe a cask someday.", urgency="Exploratory")
         assert decision.passed is True
         assert decision.fabrication_detected is False
 
     def test_asap_to_high_passes(self) -> None:
-        decision = self._verify_urgency("Need docs ASAP for the cask allocation.", urgency="high")
+        decision = self._verify_urgency("Need docs ASAP for the cask allocation.", urgency="Immediate")
         assert decision.passed is True
         assert decision.fabrication_detected is False
 
     def test_within_30_days_medium_passes(self) -> None:
         decision = self._verify_urgency(
-            "I'd like to place funds within 30 days.", urgency="medium"
+            "I'd like to place funds within 30 days.", urgency="Within three months"
         )
         assert decision.passed is True
         assert decision.fabrication_detected is False
@@ -984,7 +984,7 @@ class TestUrgencySupportedEnumPasses:
 
 
 class TestPlannerPlaceholdersDoNotDriveFabrication:
-    """Regression for run 5c056b3d…: planner args like budget_band=unknown
+    """Regression for run 5c056b3d…: planner args like budget_band=Unknown
     must not cause fabrication when parse_enquiry / lookup match final_record.
     """
 
@@ -1010,8 +1010,8 @@ class TestPlannerPlaceholdersDoNotDriveFabrication:
                         "extracted": {
                             "name": "Jane Doe",
                             "email": "jane@example.com",
-                            "budget_band": "unknown",
-                            "urgency": "unknown",
+                            "budget_band": "Unknown",
+                            "urgency": "Unknown",
                             "country": "UK",
                         },
                         "jurisdiction_rule": {
@@ -1027,7 +1027,7 @@ class TestPlannerPlaceholdersDoNotDriveFabrication:
         )
 
     def test_planner_unknown_budget_but_parse_low_passes(self) -> None:
-        parse = {**PARSE_RESULT, "budget_band": "low", "urgency": "low"}
+        parse = {**PARSE_RESULT, "budget_band": "A", "urgency": "Exploratory"}
         record = {
             "extracted": dict(parse),
             "jurisdiction_rule": dict(LOOKUP_RESULT),
@@ -1053,10 +1053,10 @@ class TestPlannerPlaceholdersDoNotDriveFabrication:
         assert decision.passed is True
         assert decision.fabrication_detected is False
         user_prompt = adapter.requests[0].user_prompt
-        assert '"budget_band": "unknown"' not in user_prompt
-        assert '"urgency": "unknown"' not in user_prompt
+        assert '"budget_band": "Unknown"' not in user_prompt
+        assert '"urgency": "Unknown"' not in user_prompt
         # Successful parse values remain visible in the trace section.
-        assert '"budget_band": "low"' in user_prompt
+        assert '"budget_band": "A"' in user_prompt
 
     def test_planner_placeholder_jurisdiction_ignored_when_lookup_matches_final(self) -> None:
         tools = (
@@ -1097,7 +1097,7 @@ class TestPlannerPlaceholdersDoNotDriveFabrication:
     def test_actual_parse_enquiry_mismatch_still_fails(self) -> None:
         altered = {
             **FINAL_RECORD,
-            "extracted": {**PARSE_RESULT, "budget_band": "low"},
+            "extracted": {**PARSE_RESULT, "budget_band": "A"},
         }
         adapter = FakeAdapter([_response_for(_passing_decision())])
         decision = verify(ENQUIRY_TEXT, _plan(*CANONICAL_TOOLS), _trace(*CANONICAL_TOOLS), altered, adapter)
@@ -1230,32 +1230,32 @@ class TestSelfContradictionUnitChecks:
 
     def test_example_a_budget_high_restated_in_justification(self) -> None:
         reason = (
-            'budget_band "high" is CONTRADICTED because AUD 120,000 clearly falls '
+            'budget_band "C" is CONTRADICTED because AUD 120,000 clearly falls '
             "into the high category."
         )
-        assert _reason_self_contradicts_claim(reason, "budget_band", "high") is True
+        assert _reason_self_contradicts_claim(reason, "budget_band", "C") is True
 
     def test_example_b_urgency_low_explicitly_supported_and_fabricated(self) -> None:
-        reason = 'urgency "low" is supported by "No rush at all" but is fabricated.'
-        assert _reason_self_contradicts_claim(reason, "urgency", "low") is True
+        reason = 'urgency "Exploratory" is supported by "No rush at all" but is fabricated.'
+        assert _reason_self_contradicts_claim(reason, "urgency", "Exploratory") is True
 
     def test_example_c_urgency_high_justified_by_high_signal_phrase(self) -> None:
         reason = (
-            'urgency "high" is contradicted because the enquiry says '
+            'urgency "Immediate" is contradicted because the enquiry says '
             '"please call me urgently."'
         )
-        assert _reason_self_contradicts_claim(reason, "urgency", "high") is True
+        assert _reason_self_contradicts_claim(reason, "urgency", "Immediate") is True
 
     def test_genuine_contradiction_with_opposing_signal_is_not_cleared(self) -> None:
         reason = (
-            'urgency "high" is CONTRADICTED because the enquiry clearly states '
+            'urgency "Immediate" is CONTRADICTED because the enquiry clearly states '
             '"not urgent," so high is fabricated.'
         )
-        assert _reason_self_contradicts_claim(reason, "urgency", "high") is False
+        assert _reason_self_contradicts_claim(reason, "urgency", "Immediate") is False
 
     def test_unrelated_field_reason_does_not_match(self) -> None:
         reason = 'country "Singapore" does not appear anywhere in the enquiry text.'
-        assert _reason_self_contradicts_claim(reason, "urgency", "low") is False
+        assert _reason_self_contradicts_claim(reason, "urgency", "Exploratory") is False
 
     def test_strip_clears_only_the_self_contradictory_field(self) -> None:
         decision = _passing_decision(
@@ -1263,12 +1263,12 @@ class TestSelfContradictionUnitChecks:
             fabrication_detected=True,
             fabricated_fields=["urgency", "email"],
             reason=(
-                'urgency "low" is supported by "Not urgent" but is fabricated. '
+                'urgency "Exploratory" is supported by "Not urgent" but is fabricated. '
                 "email does not appear anywhere in the enquiry."
             ),
         )
         cleaned, warnings = _strip_self_contradictory_claims(
-            decision, {"extracted": {"urgency": "low", "email": "x@example.com"}}
+            decision, {"extracted": {"urgency": "Exploratory", "email": "x@example.com"}}
         )
         assert cleaned.fabricated_fields == ["email"]
         assert cleaned.fabrication_detected is True
@@ -1373,7 +1373,7 @@ class TestVerifierConsistencyValidatorEndToEnd:
             fabrication_detected=True,
             fabricated_fields=["budget_band"],
             reason=(
-                'budget_band "high" is CONTRADICTED because AUD 120,000 clearly '
+                'budget_band "C" is CONTRADICTED because AUD 120,000 clearly '
                 "falls into the high category."
             ),
         )
@@ -1381,8 +1381,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
             "I want to buy a premium Scotch whisky cask portfolio around "
             "AUD 120,000 this month — please call me urgently.",
             decision,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             name="Olivia Hart",
             email="olivia.hart@example.com",
             phone="+61 412 555 018",
@@ -1401,7 +1401,7 @@ class TestVerifierConsistencyValidatorEndToEnd:
             fabrication_detected=True,
             fabricated_fields=["urgency"],
             reason=(
-                'urgency "high" is contradicted because the enquiry says '
+                'urgency "Immediate" is contradicted because the enquiry says '
                 '"please call me urgently."'
             ),
         )
@@ -1409,8 +1409,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
             "I want to buy a premium Scotch whisky cask portfolio around "
             "AUD 120,000 this month — please call me urgently.",
             decision,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             name="Olivia Hart",
             email="olivia.hart@example.com",
             phone="+61 412 555 018",
@@ -1427,8 +1427,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
             fabrication_detected=True,
             fabricated_fields=["budget_band", "urgency"],
             reason=(
-                'budget_band "high" is CONTRADICTED because AUD 120,000 clearly '
-                'falls into the high category. urgency "high" is contradicted '
+                'budget_band "C" is CONTRADICTED because AUD 120,000 clearly '
+                'falls into the C category. urgency "Immediate" is contradicted '
                 'because the enquiry says "please call me urgently."'
             ),
         )
@@ -1436,8 +1436,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
             "I want to buy a premium Scotch whisky cask portfolio around "
             "AUD 120,000 this month — please call me urgently.",
             decision,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             name="Olivia Hart",
             email="olivia.hart@example.com",
             phone="+61 412 555 018",
@@ -1454,13 +1454,13 @@ class TestVerifierConsistencyValidatorEndToEnd:
             passed=False,
             fabrication_detected=True,
             fabricated_fields=["urgency"],
-            reason='urgency "low" is supported by "No rush at all" but is fabricated.',
+            reason='urgency "Exploratory" is supported by "No rush at all" but is fabricated.',
         )
         result = self._verify(
             "Just browsing — maybe a small cask under £5,000 someday. No rush at all.",
             decision,
-            urgency="low",
-            budget_band="low",
+            urgency="Exploratory",
+            budget_band="A",
             name="Priya Nair",
             email="priya.nair@example.co.uk",
             phone=None,
@@ -1476,8 +1476,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
             fabrication_detected=True,
             fabricated_fields=["urgency"],
             reason=(
-                'urgency "low" is supported by "not urgent" but flagged as '
-                "fabricated since medium also seemed plausible."
+                'urgency "Exploratory" is supported by "not urgent" but flagged as '
+                "fabricated since Within three months also seemed plausible."
             ),
         )
         result = self._verify(
@@ -1486,8 +1486,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
             "Interested in a mid-range cask, roughly CAD 25–40k, "
             "sometime in the next few months (not urgent).\n\nThanks",
             decision,
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="B",
             name="Noah Berger",
             email="noah.berger@example.ca",
             phone="+1 416 555 7721",
@@ -1502,15 +1502,15 @@ class TestVerifierConsistencyValidatorEndToEnd:
             passed=False,
             fabrication_detected=True,
             fabricated_fields=["urgency"],
-            reason='urgency "low" is supported by "Not urgent" yet listed as fabricated.',
+            reason='urgency "Exploratory" is supported by "Not urgent" yet listed as fabricated.',
         )
         result = self._verify(
             "Hi, I'm Daniel Okonkwo calling from Lagos. My phone is "
             "+234 801 555 0199. I am interested in a medium-budget whisky "
             "cask, no email address — please use SMS only. Not urgent.",
             decision,
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="C",
             name="Daniel Okonkwo",
             email="unused@example.com",
             phone="+234 801 555 0199",
@@ -1533,8 +1533,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
         result = self._verify(
             "Interested in a whisky cask, no contact details given.",
             decision,
-            urgency="unknown",
-            budget_band="unknown",
+            urgency="Unknown",
+            budget_band="Unknown",
             email="fabricated@example.com",
         )
         assert result.passed is False
@@ -1546,8 +1546,8 @@ class TestVerifierConsistencyValidatorEndToEnd:
         genuine deterministic tool-derived mismatch present in the same run
         must still fail the run."""
         record, trace, tools = self._record_and_trace(
-            urgency="low",
-            budget_band="low",
+            urgency="Exploratory",
+            budget_band="A",
             name="Priya Nair",
             email="priya.nair@example.co.uk",
             phone=None,
@@ -1558,7 +1558,7 @@ class TestVerifierConsistencyValidatorEndToEnd:
             passed=False,
             fabrication_detected=True,
             fabricated_fields=["urgency"],
-            reason='urgency "low" is supported by "No rush at all" but is fabricated.',
+            reason='urgency "Exploratory" is supported by "No rush at all" but is fabricated.',
         )
         adapter = FakeAdapter([_response_for(decision)])
         result = verify(
@@ -1637,10 +1637,10 @@ class TestExtractedContradictionGateArchitecture:
     def test_under_5k_low_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "Just browsing — maybe a small cask under £5,000 someday. No rush at all.",
-            urgency="low",
-            budget_band="low",
+            urgency="Exploratory",
+            budget_band="A",
             hostile_fields=["budget_band", "urgency"],
-            hostile_reason="budget_band low and urgency low are fabricated",
+            hostile_reason="budget_band A and urgency Exploratory are fabricated",
         )
         assert result.passed is True
         assert result.fabrication_detected is False
@@ -1648,15 +1648,15 @@ class TestExtractedContradictionGateArchitecture:
     def test_no_rush_low_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "Interested in a cask. No rush.",
-            urgency="low",
-            budget_band="unknown",
+            urgency="Exploratory",
+            budget_band="Unknown",
             hostile_fields=["urgency"],
-            hostile_reason='urgency "low" is supported by "No rush" therefore fabricated.',
+            hostile_reason='urgency "Exploratory" is supported by "No rush" therefore fabricated.',
             verdicts=[
                 ExtractedFieldVerdict(
                     field="urgency",
                     label=ExtractedFieldLabel.CONTRADICTED,
-                    note="prefers medium",
+                    note="prefers Within three months",
                 )
             ],
         )
@@ -1666,18 +1666,18 @@ class TestExtractedContradictionGateArchitecture:
     def test_not_urgent_low_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "Medium-budget whisky cask. Not urgent.",
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="C",
             hostile_fields=["urgency"],
-            hostile_reason="urgency low is fabricated",
+            hostile_reason="urgency Exploratory is fabricated",
         )
         assert result.passed is True
 
     def test_just_browsing_low_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "just browsing for now",
-            urgency="low",
-            budget_band="unknown",
+            urgency="Exploratory",
+            budget_band="Unknown",
             hostile_fields=["urgency"],
             hostile_reason="fabricated urgency",
         )
@@ -1686,8 +1686,8 @@ class TestExtractedContradictionGateArchitecture:
     def test_this_month_high_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "Ready to buy this month.",
-            urgency="high",
-            budget_band="unknown",
+            urgency="Immediate",
+            budget_band="Unknown",
             hostile_fields=["urgency"],
             hostile_reason="urgency high contradicted",
         )
@@ -1696,11 +1696,11 @@ class TestExtractedContradictionGateArchitecture:
     def test_urgently_high_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "Please call me urgently this month.",
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="Unknown",
             hostile_fields=["urgency"],
             hostile_reason=(
-                'urgency "high" is contradicted because the enquiry says '
+                'urgency "Immediate" is contradicted because the enquiry says '
                 '"please call me urgently."'
             ),
         )
@@ -1709,11 +1709,11 @@ class TestExtractedContradictionGateArchitecture:
     def test_aud_120k_high_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "around AUD 120,000 for a premium portfolio",
-            urgency="unknown",
-            budget_band="high",
+            urgency="Unknown",
+            budget_band="C",
             hostile_fields=["budget_band"],
             hostile_reason=(
-                'budget_band "high" is CONTRADICTED because AUD120k is high'
+                'budget_band "C" is CONTRADICTED because AUD120k is high'
             ),
             verdicts=[
                 ExtractedFieldVerdict(
@@ -1733,8 +1733,8 @@ class TestExtractedContradictionGateArchitecture:
     def test_95k_high_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "approximately £95,000 into a cask allocation within 30 days.",
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason="both fabricated",
         )
@@ -1743,15 +1743,15 @@ class TestExtractedContradictionGateArchitecture:
     def test_next_few_months_not_urgent_low_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "CAD 25–40k, sometime in the next few months (not urgent).",
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="B",
             hostile_fields=["urgency"],
             hostile_reason="prefer medium; low fabricated",
             verdicts=[
                 ExtractedFieldVerdict(
                     field="urgency",
                     label=ExtractedFieldLabel.CONTRADICTED,
-                    note="should be medium",
+                    note="should be Within three months",
                 )
             ],
         )
@@ -1760,8 +1760,8 @@ class TestExtractedContradictionGateArchitecture:
     def test_within_30_days_medium_never_quarantined(self) -> None:
         result = self._verify_hostile(
             "I'd like to place funds within 30 days.",
-            urgency="medium",
-            budget_band="unknown",
+            urgency="Within three months",
+            budget_band="Unknown",
             hostile_fields=["urgency"],
             hostile_reason="should have been high",
         )
@@ -1778,12 +1778,12 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason=(
-                'budget_band "high" is CONTRADICTED because AUD 120,000 clearly '
-                'falls into the high category. urgency "high" is contradicted '
+                'budget_band "C" is CONTRADICTED because AUD 120,000 clearly '
+                'falls into the C category. urgency "Immediate" is contradicted '
                 'because the enquiry says "please call me urgently."'
             ),
             name="Olivia Hart",
@@ -1803,8 +1803,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="B",
             hostile_fields=["urgency", "budget_band"],
             hostile_reason="prefer different bands",
             name="Noah Berger",
@@ -1823,8 +1823,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="low",
-            budget_band="low",
+            urgency="Exploratory",
+            budget_band="A",
             hostile_fields=["urgency", "budget_band"],
             hostile_reason="low is supported therefore fabricated",
             name="Priya Nair",
@@ -1842,8 +1842,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="medium",
-            budget_band="medium",
+            urgency="Within three months",
+            budget_band="B",
             hostile_fields=["urgency", "budget_band"],
             hostile_reason="reclassified",
             name="Marcus Webb",
@@ -1861,8 +1861,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="medium",
-            budget_band="high",
+            urgency="Within three months",
+            budget_band="C",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason="CAD 80k should not be high",
             name="Sophie Tremblay",
@@ -1881,8 +1881,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason="95k is medium; within 30 days is medium",
             name="James Whitfield",
@@ -1900,8 +1900,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="high",
-            budget_band="medium",  # wrong band
+            urgency="Immediate",
+            budget_band="B",  # wrong band
             hostile_fields=[],  # LLM missed it — gate must add
             hostile_reason="looks fine",
             name="James Whitfield",
@@ -1921,8 +1921,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason="fabricated",
             name="Ava Chen",
@@ -1939,8 +1939,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="high",
-            budget_band="high",
+            urgency="Immediate",
+            budget_band="C",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason="self-contradictory reclassification",
             name="Olivia Hart",
@@ -1958,10 +1958,10 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="low",
-            budget_band="medium",
+            urgency="Exploratory",
+            budget_band="C",
             hostile_fields=["urgency"],
-            hostile_reason='urgency "low" is supported by "Not urgent" but fabricated',
+            hostile_reason='urgency "Exploratory" is supported by "Not urgent" but fabricated',
             name="Daniel Okonkwo",
             email=None,
             phone="+234 801 555 0199",
@@ -1976,8 +1976,8 @@ class TestExtractedContradictionGateArchitecture:
         )
         result = self._verify_hostile(
             enquiry,
-            urgency="medium",
-            budget_band="medium",
+            urgency="Within three months",
+            budget_band="B",
             hostile_fields=["budget_band", "urgency"],
             hostile_reason="prefer high",
             name="Lena Ortiz",
@@ -2025,7 +2025,7 @@ class TestExtractedContradictionGateArchitecture:
         cleaned, warnings = _apply_extracted_contradiction_gate(
             decision,
             enquiry_text="No rush at all.",
-            final_record={"extracted": {"urgency": "low", "budget_band": "unknown"}},
+            final_record={"extracted": {"urgency": "Exploratory", "budget_band": "Unknown"}},
         )
         assert cleaned.fabricated_fields == []
         assert cleaned.passed is True

@@ -94,7 +94,11 @@ class TestVerifierAgainstARealExecutorTrace:
                 "parse_enquiry",
                 lambda self, args: ToolResult(
                     success=True,
-                    data={"name": "Jane Doe", "email": "jane@example.com"},
+                    data={
+                        "name": "Jane Doe",
+                        "email": "jane@example.com",
+                        "asset_interest": "Whisky cask",
+                    },
                     error=None,
                     latency_ms=1.0,
                 ),

@@ -42,7 +42,7 @@ You will be given four pieces of evidence:
 1. The original enquiry text, verbatim -- primary evidence for EXTRACTED fields.
 2. The plan that was intended to be executed: ordered tool names only.
    Plan step `args` are intentionally omitted: they are non-authoritative
-   planner placeholders (often incomplete, e.g. budget_band/urgency "unknown"
+   planner placeholders (often incomplete, e.g. budget_band/urgency "Unknown"
    or a stub jurisdiction_rule). They must NEVER be used as evidence for
    fabrication. The execution trace always wins over any planner intention.
 3. The tool call trace: what actually executed, in order, with each step's
@@ -78,8 +78,8 @@ extractor** could produce the parser's value from this enquiry
 #### Structured per-field verdicts (mandatory)
 
 For every non-null extracted field you judge — and ALWAYS for
-`budget_band` and `urgency` when present — return an entry in
-`extracted_field_verdicts` with:
+`budget_band`, `urgency`, and `asset_interest` when present — return an
+entry in `extracted_field_verdicts` with:
 
 - `field`: the field name (e.g. `urgency`, `budget_band`, `email`)
 - `label`: exactly one of `SUPPORTED` | `CONTRADICTED` | `INSUFFICIENT_EVIDENCE`
@@ -105,35 +105,70 @@ contract violation and will be discarded.
 **Ask:** "Could a reasonable extractor produce this value from the
 enquiry?" — NOT "What enum would I extract?"
 
-Allowed enum values ONLY: `high` | `medium` | `low` | `unknown`.
-There is no value "below low" or "above high".
+Allowed enum values ONLY, exactly as written (official Trial A contract,
+docs/WCC_Trial_A_Enquiry_Samples.md):
+
+- `budget_band`: `A` | `B` | `C` | `D` | `Unknown`
+- `urgency`: `Immediate` | `Within three months` | `Exploratory` | `Unknown`
+- `asset_interest`: `Whisky cask` | `Tequila barrel` | `Wine` | `Multiple` |
+  `Unspecified`
+
+There is no value outside these closed sets. Never treat a legacy
+`low`/`medium`/`high` label as a real value — if you see one anywhere it
+is a bug, not something to reproduce.
 
 #### Worked urgency examples (support check only)
 
-- "Not urgent" → `low` is SUPPORTED.
-- "No rush at all" → `low` is SUPPORTED.
-- "Someday" / "just browsing" → `low` is SUPPORTED.
-- "sometime in the next few months (not urgent)" → `low` is SUPPORTED
-  (medium may also be reasonable — still not fabrication).
-- "Within 30 days" → `medium` is SUPPORTED (`high` may also be reasonable).
-- "ASAP" / "urgently" / "this month" → `high` is SUPPORTED.
-  Returning `low` is CONTRADICTED.
-- "Need it this week" → `high` is SUPPORTED; `low` is CONTRADICTED.
+- "Not urgent" → `Exploratory` is SUPPORTED.
+- "No rush at all" → `Exploratory` is SUPPORTED.
+- "Someday" / "just browsing" → `Exploratory` is SUPPORTED.
+- "sometime in the next few months (not urgent)" → `Exploratory` is
+  SUPPORTED (`Within three months` may also be reasonable — still not
+  fabrication).
+- "Within 30 days" → `Within three months` is SUPPORTED (`Immediate` may
+  also be reasonable).
+- "ASAP" / "urgently" / "this month" → `Immediate` is SUPPORTED.
+  Returning `Exploratory` is CONTRADICTED.
+- "Need it this week" → `Immediate` is SUPPORTED; `Exploratory` is
+  CONTRADICTED.
 
-#### Worked budget_band examples (project thresholds)
+#### Worked budget_band examples (official USD thresholds)
 
-Documented bands: low under ~20k; medium ~20k–69k; high ≥ ~70k
-(currency symbols £/€/$/AUD/CAD/USD equivalent; commas and approximators
-ignored).
+Official bands, by approximate USD value: `A` under 10,000; `B` 10,000 to
+49,999; `C` 50,000 to 249,999; `D` 250,000 and above. When the enquiry is
+in a non-USD currency, convert approximately before judging the band —
+use the SAME rounded factors given to the extractor: GBP ×1.275,
+EUR ×1.075, AUD ×0.675, CAD ×0.725, SGD ×0.745, NZD ×0.6, THB ÷35. Reason
+approximately (which band the converted amount falls in), never compute
+an exact number. If the currency is one you cannot approximate at all,
+`Unknown` is SUPPORTED and should not be penalized.
 
-- "CAD 25–40k" / "mid-range" → `medium` is SUPPORTED.
-- "under £5,000" → `low` is SUPPORTED.
-- "AUD 120,000" / "around AUD 120k" → `high` is SUPPORTED.
-  Never CONTRADICTED simply because the amount is high.
-- "approximately £95,000" / "£95,000" → `high` is SUPPORTED;
-  extracted `medium` is CONTRADICTED (band violation).
+- "CAD 25–40k" / "mid-range cask" → converts to roughly USD 18k–29k →
+  `B` is SUPPORTED.
+- "under £5,000" → converts to roughly USD 6,000 → `A` is SUPPORTED.
+- "AUD 120,000" / "around AUD 120k" → converts to roughly USD 81,000 →
+  `C` is SUPPORTED. Never CONTRADICTED simply because the raw AUD figure
+  looks large — it is the converted USD value that determines the band.
+- "approximately £95,000" / "£95,000" → converts to roughly USD 121,000 →
+  `C` is SUPPORTED; extracted `B` is CONTRADICTED (band violation).
+- "low six figures" → roughly USD 100k–199k → `C` is SUPPORTED.
+- "high six figures" → roughly USD 500k–999k → `D` is SUPPORTED.
 
 Do NOT treat planner placeholders as the "correct" extraction.
+
+#### Worked asset_interest examples (support check only)
+
+- "whisky cask" / "Scotch" / "Speyside" / "single malt" → `Whisky cask`
+  is SUPPORTED.
+- "tequila barrel" / "tequila" → `Tequila barrel` is SUPPORTED.
+- "wine" / "vintage wine" → `Wine` is SUPPORTED.
+- Enquiry names two or more distinct asset types (e.g. whisky AND
+  tequila) → `Multiple` is SUPPORTED.
+- Enquiry names one specific asset type but the extraction is
+  `Unspecified` → CONTRADICTED (a specific type was clearly named).
+- Enquiry gives no signal of any specific asset type at all →
+  `Unspecified` is SUPPORTED; a specific type would be unsupported
+  speculation.
 
 Extracted fields include (under `final_record.extracted` and equivalents):
 - name, email, phone, country
@@ -202,7 +237,7 @@ Return a single decision:
 - `confidence`: your genuine confidence in this decision, between 0.0 and
   1.0.
 - `extracted_field_verdicts`: required structured labels for extracted
-  fields you judged (especially `budget_band` / `urgency`).
+  fields you judged (especially `budget_band` / `urgency` / `asset_interest`).
 - `fabrication_detected` and `fabricated_fields`: extracted entries only
   for CONTRADICTED verdicts; derived fields per DERIVED rules above.
 - `plan_deviation_detected` and `deviation_details`: as defined under plan
@@ -283,12 +318,18 @@ def build_verifier_user_prompt(
         "Independently verify using ONLY authoritative evidence. You are a "
         "fabrication checker, NOT a second extractor — do not invent a better "
         "enum. Return extracted_field_verdicts with SUPPORTED / CONTRADICTED / "
-        "INSUFFICIENT_EVIDENCE for extracted fields (always for budget_band "
-        "and urgency). Only CONTRADICTED may appear in fabricated_fields. "
-        "SUPPORTED and INSUFFICIENT_EVIDENCE must never be fabricated. "
-        "'No rush at all' / 'Not urgent' → urgency=low SUPPORTED. "
-        "'AUD 120,000' → budget_band=high SUPPORTED. "
-        "'next few months (not urgent)' → urgency=low SUPPORTED. "
+        "INSUFFICIENT_EVIDENCE for extracted fields (always for budget_band, "
+        "urgency, and asset_interest). Only CONTRADICTED may appear in "
+        "fabricated_fields. SUPPORTED and INSUFFICIENT_EVIDENCE must never be "
+        "fabricated. Official enums only: budget_band is A|B|C|D|Unknown "
+        "(by approximate USD value: A<10k, B 10k-49,999, C 50k-249,999, "
+        "D>=250k; convert non-USD currencies approximately before judging); "
+        "urgency is Immediate|Within three months|Exploratory|Unknown; "
+        "asset_interest is Whisky cask|Tequila barrel|Wine|Multiple|"
+        "Unspecified. "
+        "'No rush at all' / 'Not urgent' → urgency=Exploratory SUPPORTED. "
+        "'AUD 120,000' (~USD 81,000) → budget_band=C SUPPORTED. "
+        "'next few months (not urgent)' → urgency=Exploratory SUPPORTED. "
         "final_record.extracted should match successful parse_enquiry; "
         "tool-DERIVED fields against successful tool outputs; dedupe_hash "
         "by recomputation. Never use planner placeholders. Then return "

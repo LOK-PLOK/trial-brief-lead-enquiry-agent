@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.extracted_support import classify_budget_band, classify_urgency
+from app.agent.extracted_support import (
+    classify_asset_interest,
+    classify_budget_band,
+    classify_closed_enum,
+    classify_urgency,
+)
 from app.schemas.verifier import ExtractedFieldLabel
 
 
@@ -16,16 +21,26 @@ INSUFFICIENT = ExtractedFieldLabel.INSUFFICIENT_EVIDENCE
 @pytest.mark.parametrize(
     ("enquiry", "value", "expected"),
     [
-        ("Just browsing — under £5,000 someday. No rush at all.", "low", SUPPORTED),
-        ("Budget around AUD 120,000 this month.", "high", SUPPORTED),
-        ("around AUD 120k for a premium portfolio", "high", SUPPORTED),
-        ("approximately £95,000 available", "high", SUPPORTED),
-        ("£95,000", "high", SUPPORTED),
-        ("approximately £95,000", "medium", CONTRADICTED),
-        ("CAD 25–40k mid-range cask", "medium", SUPPORTED),
-        ("roughly CAD 25-40k", "medium", SUPPORTED),
-        ("Interested, no budget mentioned.", "unknown", INSUFFICIENT),
-        ("AUD 120,000 — phone +61 412 555 018", "high", SUPPORTED),
+        # Official bands by approximate USD value: A<10k, B 10k-49,999,
+        # C 50k-249,999, D>=250k.
+        ("Just browsing — under £5,000 someday. No rush at all.", "A", SUPPORTED),
+        ("Budget around AUD 120,000 this month.", "C", SUPPORTED),
+        ("around AUD 120k for a premium portfolio", "C", SUPPORTED),
+        ("approximately £95,000 available", "C", SUPPORTED),
+        ("£95,000", "C", SUPPORTED),
+        ("approximately £95,000", "B", CONTRADICTED),
+        ("CAD 25–40k mid-range cask", "B", SUPPORTED),
+        ("roughly CAD 25-40k", "B", SUPPORTED),
+        ("Interested, no budget mentioned.", "Unknown", INSUFFICIENT),
+        ("AUD 120,000 — phone +61 412 555 018", "C", SUPPORTED),
+        # New currencies added by the official-enum migration.
+        ("SGD 120,000 available this month", "C", SUPPORTED),
+        ("NZD 30,000 for one cask", "B", SUPPORTED),
+        ("200000 baht available now", "A", SUPPORTED),
+        ("USD 300,000 to invest right away", "D", SUPPORTED),
+        ("150,000 US dollars ready to go", "C", SUPPORTED),
+        # Unknown is only fabricatable when the enquiry clearly has a band.
+        ("AUD 120,000 this month", "Unknown", CONTRADICTED),
     ],
 )
 def test_classify_budget_band(enquiry: str, value: str, expected: ExtractedFieldLabel) -> None:
@@ -35,20 +50,58 @@ def test_classify_budget_band(enquiry: str, value: str, expected: ExtractedField
 @pytest.mark.parametrize(
     ("enquiry", "value", "expected"),
     [
-        ("No rush at all.", "low", SUPPORTED),
-        ("Not urgent.", "low", SUPPORTED),
-        ("just browsing for now", "low", SUPPORTED),
-        ("sometime in the next few months (not urgent)", "low", SUPPORTED),
-        ("sometime in the next few months (not urgent)", "medium", INSUFFICIENT),
-        ("Please call me urgently this month.", "high", SUPPORTED),
-        ("Need it this week", "high", SUPPORTED),
-        ("Need it this week", "low", CONTRADICTED),
-        ("within 30 days", "medium", SUPPORTED),
-        ("within 30 days", "high", SUPPORTED),
-        ("ASAP please", "high", SUPPORTED),
-        ("ASAP please", "low", CONTRADICTED),
-        ("Hi, interested in casks.", "unknown", INSUFFICIENT),
+        ("No rush at all.", "Exploratory", SUPPORTED),
+        ("Not urgent.", "Exploratory", SUPPORTED),
+        ("just browsing for now", "Exploratory", SUPPORTED),
+        ("sometime in the next few months (not urgent)", "Exploratory", SUPPORTED),
+        ("sometime in the next few months (not urgent)", "Within three months", INSUFFICIENT),
+        ("Please call me urgently this month.", "Immediate", SUPPORTED),
+        ("Need it this week", "Immediate", SUPPORTED),
+        ("Need it this week", "Exploratory", CONTRADICTED),
+        ("within 30 days", "Within three months", SUPPORTED),
+        ("within 30 days", "Immediate", SUPPORTED),
+        ("ASAP please", "Immediate", SUPPORTED),
+        ("ASAP please", "Exploratory", CONTRADICTED),
+        ("Hi, interested in casks.", "Unknown", INSUFFICIENT),
     ],
 )
 def test_classify_urgency(enquiry: str, value: str, expected: ExtractedFieldLabel) -> None:
     assert classify_urgency(enquiry, value) is expected
+
+
+@pytest.mark.parametrize(
+    ("enquiry", "value", "expected"),
+    [
+        ("Interested in a Scotch whisky cask.", "Whisky cask", SUPPORTED),
+        ("Looking at a Speyside single malt.", "Whisky cask", SUPPORTED),
+        ("I'd like a tequila barrel allocation.", "Tequila barrel", SUPPORTED),
+        ("Interested in a vintage wine collection.", "Wine", SUPPORTED),
+        # A specific type is named but the wrong category was extracted.
+        ("Interested in a tequila barrel.", "Whisky cask", CONTRADICTED),
+        ("Interested in a Scotch whisky cask.", "Wine", CONTRADICTED),
+        # A specific type is named but the extractor said Unspecified.
+        ("Interested in a Scotch whisky cask.", "Unspecified", CONTRADICTED),
+        # No specific type mentioned at all — not enough evidence either way
+        # (mirrors budget_band/urgency: "Unknown" with no signal is
+        # INSUFFICIENT_EVIDENCE, not SUPPORTED).
+        ("Interested in collectible assets, no specifics yet.", "Unspecified", INSUFFICIENT),
+        ("Interested in collectible assets, no specifics yet.", "Whisky cask", INSUFFICIENT),
+        # Multiple asset types genuinely mentioned.
+        ("Interested in both whisky casks and tequila barrels.", "Multiple", SUPPORTED),
+        # Only one type mentioned but extractor said Multiple: not enough
+        # evidence to call it a clear contradiction either way.
+        ("Interested in a Scotch whisky cask.", "Multiple", INSUFFICIENT),
+    ],
+)
+def test_classify_asset_interest(enquiry: str, value: str, expected: ExtractedFieldLabel) -> None:
+    assert classify_asset_interest(enquiry, value) is expected
+
+
+def test_classify_closed_enum_dispatches_all_three_fields() -> None:
+    assert classify_closed_enum("under £5,000", "budget_band", "A") is SUPPORTED
+    assert classify_closed_enum("No rush at all.", "urgency", "Exploratory") is SUPPORTED
+    assert (
+        classify_closed_enum("Interested in a whisky cask.", "asset_interest", "Whisky cask")
+        is SUPPORTED
+    )
+    assert classify_closed_enum("hi", "email", "x@example.com") is None

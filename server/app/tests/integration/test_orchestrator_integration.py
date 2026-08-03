@@ -56,7 +56,14 @@ def _register_canonical_mock_tools() -> None:
     _mock_tool(
         "parse_enquiry",
         lambda self, args: ToolResult(
-            success=True, data={"name": "Jane Doe", "email": "jane@example.com"}, error=None, latency_ms=1.0
+            success=True,
+            data={
+                "name": "Jane Doe",
+                "email": "jane@example.com",
+                "asset_interest": "Whisky cask",
+            },
+            error=None,
+            latency_ms=1.0,
         ),
     )
     _mock_tool(
@@ -177,6 +184,7 @@ class _FullPipelineFakeAdapter(ModelAdapter):
                 email="jane@example.com",
                 phone=None,
                 country="Singapore",
+                asset_interest="Whisky cask",
             )
             model = "fake-extractor-model"
         else:

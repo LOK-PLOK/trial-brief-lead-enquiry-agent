@@ -139,7 +139,12 @@ def _restore_tool_slate(saved: dict) -> None:
     Tool._registry.update(saved)
 
 
-_JANE = {"name": "Jane Doe", "email": "jane@example.com", "phone": "+65 5551234"}
+_JANE = {
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "phone": "+65 5551234",
+    "asset_interest": "Whisky cask",
+}
 
 
 def _canonical_plan(contact: dict = _JANE) -> Plan:
