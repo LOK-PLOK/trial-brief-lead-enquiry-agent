@@ -15,6 +15,7 @@ from app.db.models import Run
 _FIELD_BUCKETS = (
     "budget_band",
     "urgency",
+    "asset_interest",
     "country",
     "jurisdiction",
     "score",
@@ -29,6 +30,8 @@ def _bucket_field(name: str) -> str:
         return "budget_band"
     if "urgency" in n:
         return "urgency"
+    if "asset" in n:
+        return "asset_interest"
     if n == "country" or n.endswith(".country"):
         if "jurisdiction" in n:
             return "jurisdiction"

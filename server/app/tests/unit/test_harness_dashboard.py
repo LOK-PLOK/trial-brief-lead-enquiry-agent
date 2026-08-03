@@ -61,7 +61,7 @@ def test_build_dashboard_statistics_and_health() -> None:
             final_status="quarantined",
             verifier_pass=False,
             fabrication_detected=True,
-            fabricated_fields=["urgency", "budget_band"],
+            fabricated_fields=["urgency", "budget_band", "asset_interest"],
             repair_attempted=True,
             repair_succeeded=False,
         ),
@@ -81,6 +81,7 @@ def test_build_dashboard_statistics_and_health() -> None:
     assert dash["statistics"]["quarantined"] == 1
     assert dash["failure_breakdown"]["urgency"] == 1
     assert dash["failure_breakdown"]["budget_band"] == 1
+    assert dash["failure_breakdown"]["asset_interest"] == 1
     assert dash["pipeline_health"]["planner"] in {"green", "yellow", "red", "unknown"}
     assert len(dash["runs"]) == 2
 
