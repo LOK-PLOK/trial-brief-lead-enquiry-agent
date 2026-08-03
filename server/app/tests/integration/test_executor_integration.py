@@ -169,7 +169,7 @@ def test_executor_runs_real_parse_enquiry_with_scripted_adapter() -> None:
     extraction only — no deterministic parsers)."""
     from app.agent.prompts.parse_enquiry_prompt import PARSE_ENQUIRY_SYSTEM_PROMPT
     from app.llm.base import ModelAdapter, StructuredCompletionRequest, StructuredCompletionResponse
-    from app.schemas.extraction import BudgetBand, ExtractedFields, Urgency
+    from app.schemas.extraction import AssetInterest, BudgetBand, ExtractedFields, Urgency
 
     captured: list[StructuredCompletionRequest] = []
 
@@ -184,9 +184,9 @@ def test_executor_runs_real_parse_enquiry_with_scripted_adapter() -> None:
                     email="noah.berger@example.ca",
                     phone="+1 416 555 7721",
                     country="Canada",
-                    budget_band=BudgetBand.MEDIUM,
-                    asset_interest="mid-range cask",
-                    urgency=Urgency.LOW,
+                    budget_band=BudgetBand.B,
+                    asset_interest=AssetInterest.WHISKY_CASK,
+                    urgency=Urgency.EXPLORATORY,
                 ),
                 raw_response={},
                 prompt_tokens=10,
@@ -198,7 +198,7 @@ def test_executor_runs_real_parse_enquiry_with_scripted_adapter() -> None:
     enquiry = (
         "Hi — I'm Noah Berger from Toronto, Canada. "
         "Contact: noah.berger@example.ca / +1 416 555 7721.\n\n"
-        "Interested in a mid-range cask, roughly CAD 25–40k, "
+        "Interested in a whisky cask, roughly CAD 25–40k, "
         "sometime in the next few months (not urgent)."
     )
     registry = ToolRegistry(adapter=_ScriptedAdapter())
@@ -208,8 +208,8 @@ def test_executor_runs_real_parse_enquiry_with_scripted_adapter() -> None:
 
     assert result.error is None
     assert result.trace.calls[0].status == ToolCallStatus.SUCCESS
-    assert result.trace.calls[0].result["budget_band"] == "medium"
-    assert result.trace.calls[0].result["urgency"] == "low"
+    assert result.trace.calls[0].result["budget_band"] == "B"
+    assert result.trace.calls[0].result["urgency"] == "Exploratory"
     assert len(captured) == 1
     assert captured[0].system_prompt == PARSE_ENQUIRY_SYSTEM_PROMPT
     assert (

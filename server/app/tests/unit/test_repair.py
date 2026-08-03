@@ -175,8 +175,8 @@ def test_reextract_strategy_succeeds_when_reverify_passes() -> None:
                 email="sam@example.com",
                 phone="+65 9123 4567",
                 country="Singapore",
-                budget_band="medium",  # "around 20k"
-                urgency="medium",  # "soon"
+                budget_band="B",  # "around 20k"
+                urgency="Within three months",  # "soon"
             ),
             decision=_decision(passed=True, fabrication_detected=False, fabricated_fields=[], reason="ok"),
         )
